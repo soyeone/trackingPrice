@@ -139,20 +139,66 @@ def fetch_category_ranking(cat_name, cat_id):
         return []
 
 def fetch_single_product_detail(goods_no, existing_url=None):
-    url = existing_url or f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
+    """
+    올리브영 모바일 상세 페이지에서 상품명과 가격을 정확하게 파싱합니다.
+    모바일 페이지는 NetFUNNEL 차단이 없고 내부 상태 JSON(goodsName, finalPrice)이 포함되어 있습니다.
+    """
+    mobile_url = f"https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo={goods_no}"
+    mobile_headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+    
     try:
-        res = session.get(url, timeout=15)
+        res = requests.get(mobile_url, headers=mobile_headers, timeout=15)
         res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
+        html_text = res.text
         
-        name_el = soup.select_one('.prd_info .prd_name') or soup.select_one('.prd_name') or soup.select_one('title')
-        name = name_el.text.strip() if name_el else f"상품 {goods_no}"
+        name = None
+        price = None
         
-        price_el = soup.select_one('.price .sell_price') or soup.select_one('.price_num') or soup.select_one('.price-2')
-        if price_el:
-            price_str = price_el.text.replace(',', '').replace('원', '').strip()
-            if price_str.isdigit():
-                return {'goods_no': goods_no, 'name': name, 'price': int(price_str), 'url': url}
+        # 1. goodsName 정규식 검색
+        name_match = re.search(r'"goodsName"\s*:\s*"([^"]+)"', html_text)
+        if name_match:
+            try:
+                import json
+                name = json.loads(f'"{name_match.group(1)}"')
+            except Exception:
+                name = name_match.group(1)
+                
+        # 2. finalPrice 정규식 검색 (할인가 우선, 없으면 정상가)
+        price_match = re.search(r'"finalPrice"\s*:\s*([0-9]+)', html_text)
+        if price_match:
+            price = int(price_match.group(1))
+        else:
+            price_match = re.search(r'"salePrice"\s*:\s*([0-9]+)', html_text)
+            if price_match:
+                price = int(price_match.group(1))
+                
+        # 3. 폴백: OpenGraph 태그 및 BeautifulSoup 파싱
+        if not name or not price:
+            soup = BeautifulSoup(html_text, 'html.parser')
+            if not name:
+                og_title = soup.select_one('meta[property="og:title"]')
+                if og_title and og_title.get('content'):
+                    name = og_title.get('content').replace(' | 올리브영', '').strip()
+            if not price:
+                price_el = soup.select_one('.price .sell_price') or soup.select_one('.price_num') or soup.select_one('.tx_num')
+                if price_el:
+                    num_str = re.sub(r'[^0-9]', '', price_el.text)
+                    if num_str:
+                        price = int(num_str)
+                        
+        if goods_no and price:
+            target_url = existing_url or f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
+            print(f"  단일 상품 [{goods_no}] 파싱 성공: {name} (현재가: {price:,}원)")
+            return {
+                'goods_no': goods_no,
+                'name': name or f"올리브영 상품 ({goods_no})",
+                'price': price,
+                'url': target_url
+            }
     except Exception as e:
         print(f"단일 상품 [{goods_no}] 상세 페이지 수집 오류: {e}")
     return None

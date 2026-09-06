@@ -3,24 +3,137 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Olive Young Price Tracker</title>
+    <title>올리브영 가격 추적기</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
     <header>
-        <h1>올리브영 가격 추적기</h1>
-        <nav>
-            <a href="index.html">대시보드</a>
-            <a href="register.html">제품 등록</a>
-        </nav>
-    </header>
-    <main>
-        <div id="charts-container">
-            <p>데이터를 불러오는 중입니다...</p>
+        <div class="header-inner">
+            <div class="logo">
+                <a href="index.html">
+                    <span class="logo-badge">OY</span>
+                    <span class="logo-text">올리브영 가격 추적기</span>
+                </a>
+            </div>
+            <nav>
+                <a href="index.html" class="nav-link active">가격 대시보드</a>
+                <a href="register.html" class="nav-link">새 제품 등록</a>
+            </nav>
         </div>
+    </header>
+
+    <main>
+        <!-- 로딩 표시기 -->
+        <div id="loading-spinner" class="loading-box">
+            <div class="spinner"></div>
+            <p>데이터베이스에서 추적 제품 목록을 불러오는 중입니다...</p>
+        </div>
+
+        <!-- 1. 제품 목록 및 검색 뷰 -->
+        <section id="product-list-view" style="display:none;">
+            <div class="search-section">
+                <div class="search-bar-wrapper">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="search-input" placeholder="제품명 또는 상품번호(예: A000000...)를 검색하세요" autocomplete="off" />
+                    <button id="clear-search-btn" class="clear-btn" style="display:none;">✕</button>
+                </div>
+                <div class="search-stats" id="search-stats">
+                    추적 중인 제품을 불러왔습니다.
+                </div>
+            </div>
+
+            <div id="product-grid" class="product-grid">
+                <!-- 자바스크립트로 제품 카드들이 동적으로 렌더링됩니다 -->
+            </div>
+            <div id="no-results-msg" class="no-results" style="display:none;">
+                <p>검색 조건과 일치하는 제품이 없습니다.</p>
+            </div>
+        </section>
+
+        <!-- 2. 단일 제품 상세 가격 추적 뷰 -->
+        <section id="product-detail-view" style="display:none;">
+            <div class="detail-nav-bar">
+                <button id="back-to-list-btn" class="btn-back">
+                    <span class="arrow">←</span> 전체 제품 목록으로 돌아가기
+                </button>
+                <a id="detail-oy-link" href="#" target="_blank" class="btn-oy-link">
+                    올리브영 상품 페이지 열기 ↗
+                </a>
+            </div>
+
+            <div class="detail-card">
+                <div class="detail-header">
+                    <div class="goods-badge-row">
+                        <span id="detail-goods-no" class="badge-goods-no">상품번호</span>
+                        <span id="detail-custom-badge" class="badge-custom">직접 등록</span>
+                    </div>
+                    <h1 id="detail-title" class="detail-title">제품명</h1>
+                </div>
+
+                <!-- 핵심 가격 요약 카드들 -->
+                <div class="price-metrics-grid">
+                    <div class="metric-card current">
+                        <div class="metric-label">현재 가격</div>
+                        <div class="metric-value" id="metric-current">-</div>
+                        <div class="metric-sub" id="metric-current-date">최근 갱신일</div>
+                    </div>
+                    <div class="metric-card min">
+                        <div class="metric-label">역대 최저가</div>
+                        <div class="metric-value" id="metric-min">-</div>
+                        <div class="metric-sub" id="metric-min-diff">현재가 대비</div>
+                    </div>
+                    <div class="metric-card max">
+                        <div class="metric-label">역대 최고가</div>
+                        <div class="metric-value" id="metric-max">-</div>
+                        <div class="metric-sub">최고가 기록</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">가격 추적 일수</div>
+                        <div class="metric-value" id="metric-days">-</div>
+                        <div class="metric-sub" id="metric-history-count">총 0회 기록</div>
+                    </div>
+                </div>
+
+                <!-- 차트 영역 -->
+                <div class="chart-box">
+                    <div class="chart-header">
+                        <h3>📈 일자별 가격 변동 추이</h3>
+                    </div>
+                    <div class="chart-canvas-wrapper">
+                        <canvas id="detail-chart"></canvas>
+                    </div>
+                </div>
+
+                <!-- 가격 기록 테이블 -->
+                <div class="history-table-section">
+                    <h3>📋 일자별 가격 기록</h3>
+                    <div class="table-responsive">
+                        <table class="history-table">
+                            <thead>
+                                <tr>
+                                    <th>기록 날짜</th>
+                                    <th>가격 (원)</th>
+                                    <th>전일 대비 변동</th>
+                                    <th>상태</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-tbody">
+                                <!-- 자바스크립트로 행들이 채워집니다 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
     </main>
+
+    <footer>
+        <p>올리브영 가격 추적기 • 개인용 비공식 프로젝트</p>
+    </footer>
+
     <script src="js/app.js"></script>
 </body>
 </html>
