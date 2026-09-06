@@ -3,10 +3,7 @@ const SUPABASE_URL = 'https://lgdrqxsgmfighunegehv.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxnZHJxeHNnbWZpZ2h1bmVnZWh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2OTgwNDUsImV4cCI6MjEwNDI3NDA0NX0.CvJYLnbgt3C0PTBXBZoqopfoRRfT8KCTFYCnk8Pg594';
 
 // Supabase 클라이언트 초기화
-let supabase;
-if (SUPABASE_URL && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-}
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 document.addEventListener('DOMContentLoaded', async () => {
     // 등록 폼 처리
