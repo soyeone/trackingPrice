@@ -29,7 +29,10 @@ let selectedCategory = 'all';     // 'all' 또는 특정 카테고리명
 let currentViewMode = 'grouped';   // 'grouped' (카테고리별 묶어보기, 기본값) 또는 'flat' (그리드)
 let searchKeyword = '';
 
-document.addEventListener('DOMContentLoaded', async () => {
+/**
+ * 초기화 진입점
+ */
+function boot() {
     // 1. 등록 페이지 로직 (register.html)
     const registerForm = document.getElementById('register-form');
     if (registerForm) {
@@ -40,9 +43,80 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 2. 대시보드 페이지 로직 (index.html)
     const productListView = document.getElementById('product-list-view');
     if (productListView) {
-        await initDashboard();
+        initDashboard();
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+} else {
+    boot();
+}
+
+/**
+ * Supabase에서 모든 상품 조회 (1,000개 기본 상한 극복)
+ */
+async function fetchAllProducts() {
+    let all = [];
+    let from = 0;
+    const batchSize = 1000;
+    while (true) {
+        const { data, error } = await supabaseClient
+            .from('products')
+            .select('*')
+            .range(from, from + batchSize - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < batchSize) break;
+        from += batchSize;
+    }
+    return all;
+}
+
+/**
+ * Supabase에서 모든 가격 기록 조회 (1,000개 기본 상한 극복)
+ */
+async function fetchAllPrices() {
+    let all = [];
+    let from = 0;
+    const batchSize = 1000;
+    while (true) {
+        const { data, error } = await supabaseClient
+            .from('prices')
+            .select('*')
+            .order('date', { ascending: true })
+            .range(from, from + batchSize - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < batchSize) break;
+        from += batchSize;
+    }
+    return all;
+}
+
+/**
+ * 뷰 모드 전환 (카테고리별 묶어보기 vs 전체 그리드)
+ */
+function setViewMode(mode) {
+    console.log('[대시보드] 뷰 모드 변경:', mode);
+    currentViewMode = mode;
+    const btnViewGrouped = document.getElementById('btn-view-grouped');
+    const btnViewFlat = document.getElementById('btn-view-flat');
+
+    if (mode === 'grouped') {
+        selectedCategory = 'all'; // 묶어보기로 전환 시 전체 카테고리로 초기화하여 모든 그룹을 보여줌
+        updateCategoryActivePill('all');
+        if (btnViewGrouped) btnViewGrouped.classList.add('active');
+        if (btnViewFlat) btnViewFlat.classList.remove('active');
+    } else {
+        if (btnViewFlat) btnViewFlat.classList.add('active');
+        if (btnViewGrouped) btnViewGrouped.classList.remove('active');
+    }
+
+    renderView();
+}
 
 /**
  * 대시보드 초기화 및 데이터 로딩
@@ -57,17 +131,13 @@ async function initDashboard() {
     const btnViewFlat = document.getElementById('btn-view-flat');
 
     try {
-        // DB에서 제품 목록 및 가격 목록 동시 조회 (최대 3000건 지원)
-        const [productsRes, pricesRes] = await Promise.all([
-            supabaseClient.from('products').select('*').limit(3000),
-            supabaseClient.from('prices').select('*').order('date', { ascending: true }).limit(10000)
+        console.log('[대시보드] Supabase 데이터 조회 시작...');
+        // DB에서 전체 제품 및 가격 데이터 페이징 조회
+        const [rawProducts, rawPrices] = await Promise.all([
+            fetchAllProducts(),
+            fetchAllPrices()
         ]);
-
-        if (productsRes.error) throw productsRes.error;
-        if (pricesRes.error) throw pricesRes.error;
-
-        const rawProducts = productsRes.data || [];
-        const rawPrices = pricesRes.data || [];
+        console.log(`[대시보드] 데이터 로드 완료 - 상품: ${rawProducts.length}개, 가격: ${rawPrices.length}건`);
 
         // 가격 데이터를 goods_no 키로 그룹핑
         pricesByGoodsNo = {};
@@ -87,11 +157,13 @@ async function initDashboard() {
             let lastDate = null;
 
             if (history.length > 0) {
-                const pricesOnly = history.map(h => h.price);
-                currentPrice = history[history.length - 1].price;
-                lastDate = history[history.length - 1].date;
-                minPrice = Math.min(...pricesOnly);
-                maxPrice = Math.max(...pricesOnly);
+                const pricesOnly = history.map(h => h.price).filter(p => typeof p === 'number' && !isNaN(p));
+                if (pricesOnly.length > 0) {
+                    currentPrice = history[history.length - 1].price;
+                    lastDate = history[history.length - 1].date;
+                    minPrice = Math.min(...pricesOnly);
+                    maxPrice = Math.max(...pricesOnly);
+                }
             }
 
             const { category, rank } = extractProductMeta(prod);
@@ -111,25 +183,15 @@ async function initDashboard() {
 
         // 로딩 화면 숨기고 목록 뷰 표시
         if (loadingSpinner) loadingSpinner.style.display = 'none';
-        productListView.style.display = 'block';
+        if (productListView) productListView.style.display = 'block';
 
-        // 뷰 모드 토글 이벤트 등록
+        // 뷰 모드 토글 버튼 이벤트 바인딩
         if (btnViewGrouped) {
-            btnViewGrouped.addEventListener('click', () => {
-                currentViewMode = 'grouped';
-                btnViewGrouped.classList.add('active');
-                if (btnViewFlat) btnViewFlat.classList.remove('active');
-                renderView();
-            });
+            btnViewGrouped.onclick = () => setViewMode('grouped');
         }
 
         if (btnViewFlat) {
-            btnViewFlat.addEventListener('click', () => {
-                currentViewMode = 'flat';
-                btnViewFlat.classList.add('active');
-                if (btnViewGrouped) btnViewGrouped.classList.remove('active');
-                renderView();
-            });
+            btnViewFlat.onclick = () => setViewMode('flat');
         }
 
         // 검색 이벤트 리스너 등록
@@ -171,7 +233,7 @@ async function initDashboard() {
     } catch (err) {
         console.error('대시보드 데이터 로드 오류:', err);
         if (loadingSpinner) {
-            loadingSpinner.innerHTML = `<p style="color:red;">데이터를 불러오는 중 오류가 발생했습니다: ${err.message}</p>`;
+            loadingSpinner.innerHTML = `<p style="color:red; padding: 1.5rem; background: #fff0f0; border-radius: 8px;">데이터를 불러오는 중 오류가 발생했습니다: ${escapeHtml(err.message || String(err))}</p>`;
         }
     }
 }
@@ -263,12 +325,9 @@ function renderCategoryFilterBar() {
 }
 
 /**
- * 카테고리 선택 처리
+ * 카테고리 탭 활성화 상태 UI 동기화
  */
-function selectCategory(catName) {
-    selectedCategory = catName;
-
-    // 탭 활성화 상태 동기화
+function updateCategoryActivePill(catName) {
     const pills = document.querySelectorAll('.cat-pill');
     pills.forEach(pill => pill.classList.remove('active'));
 
@@ -277,6 +336,33 @@ function selectCategory(catName) {
         return pill.textContent.includes(catName);
     });
     if (activePill) activePill.classList.add('active');
+}
+
+/**
+ * 카테고리 선택 처리
+ */
+function selectCategory(catName) {
+    console.log('[대시보드] 카테고리 선택:', catName);
+    selectedCategory = catName;
+    updateCategoryActivePill(catName);
+
+    const btnViewGrouped = document.getElementById('btn-view-grouped');
+    const btnViewFlat = document.getElementById('btn-view-flat');
+
+    if (catName !== 'all') {
+        // 개별 카테고리를 선택했을 때는 해당 카테고리의 상품 그리드를 보여줌
+        if (btnViewGrouped) btnViewGrouped.classList.remove('active');
+        if (btnViewFlat) btnViewFlat.classList.add('active');
+    } else {
+        // '전체' 탭을 선택한 경우: 현재 뷰 모드에 맞춰 버튼 활성화
+        if (currentViewMode === 'grouped') {
+            if (btnViewGrouped) btnViewGrouped.classList.add('active');
+            if (btnViewFlat) btnViewFlat.classList.remove('active');
+        } else {
+            if (btnViewFlat) btnViewFlat.classList.add('active');
+            if (btnViewGrouped) btnViewGrouped.classList.remove('active');
+        }
+    }
 
     renderView();
 }
@@ -289,6 +375,11 @@ function renderView() {
     const flatGrid = document.getElementById('product-grid');
     const noResults = document.getElementById('no-results-msg');
     const searchStats = document.getElementById('search-stats');
+
+    if (!groupedContainer || !flatGrid) {
+        console.error('[대시보드] 컨테이너 요소를 찾을 수 없습니다.');
+        return;
+    }
 
     // 검색어 필터링
     let filtered = allProducts;
@@ -306,18 +397,25 @@ function renderView() {
     }
 
     if (filtered.length === 0) {
-        if (groupedContainer) groupedContainer.style.display = 'none';
-        if (flatGrid) flatGrid.style.display = 'none';
+        groupedContainer.style.display = 'none';
+        flatGrid.style.display = 'none';
         if (noResults) noResults.style.display = 'block';
         return;
     }
 
     if (noResults) noResults.style.display = 'none';
 
-    // 특정 카테고리가 선택되었거나, 전체 그리드 모드인 경우
-    if (selectedCategory !== 'all' || currentViewMode === 'flat') {
-        if (groupedContainer) groupedContainer.style.display = 'none';
-        if (flatGrid) flatGrid.style.display = 'grid';
+    // 묶어보기 조건: selectedCategory가 'all'이고 currentViewMode가 'grouped'일 때
+    const isGroupedView = (selectedCategory === 'all' && currentViewMode === 'grouped');
+
+    if (isGroupedView) {
+        flatGrid.style.display = 'none';
+        groupedContainer.style.display = 'flex';
+        renderCategoryGroupedView(groupedContainer, filtered);
+    } else {
+        // 단일 카테고리 뷰 또는 전체 그리드 뷰
+        groupedContainer.style.display = 'none';
+        flatGrid.style.display = 'grid';
 
         let categoryFiltered = filtered;
         if (selectedCategory === '직접 등록') {
@@ -334,12 +432,6 @@ function renderView() {
         });
 
         renderProductGrid(flatGrid, categoryFiltered);
-    } else {
-        // 기본 모드: 카테고리별 묶어보기 뷰
-        if (flatGrid) flatGrid.style.display = 'none';
-        if (groupedContainer) groupedContainer.style.display = 'flex';
-
-        renderCategoryGroupedView(groupedContainer, filtered);
     }
 }
 
@@ -357,7 +449,7 @@ function renderCategoryGroupedView(container, products) {
         groups[cat].push(p);
     });
 
-    // CATEGORY_LIST 순서대로 섹션 생성
+    // 1. CATEGORY_LIST 순서대로 섹션 생성
     CATEGORY_LIST.forEach(catMeta => {
         const catName = catMeta.name;
         const list = groups[catName];
@@ -373,11 +465,11 @@ function renderCategoryGroupedView(container, products) {
             <div class="category-section-header">
                 <div class="cat-header-left">
                     <span class="cat-header-icon">${catMeta.icon}</span>
-                    <h2 class="cat-header-title">${catName}</h2>
+                    <h2 class="cat-header-title">${escapeHtml(catName)}</h2>
                     <span class="cat-header-badge">${list.length}개 상품</span>
                 </div>
-                <button type="button" class="cat-view-all-btn" data-cat="${catName}">
-                    ${catName} 전체 100위 보기 →
+                <button type="button" class="cat-view-all-btn" data-cat="${escapeHtml(catName)}">
+                    ${escapeHtml(catName)} 전체 100위 보기 →
                 </button>
             </div>
             <div class="product-grid">
@@ -385,26 +477,25 @@ function renderCategoryGroupedView(container, products) {
             </div>
         `;
 
-        const sectionGrid = section.querySelector('.product-grid');
-        
-        // 검색 중이면 전체, 평상시에는 상위 8개 프리뷰
+        // 상위 8개 초과 상품이 있으면 하단 더보기 버튼 추가
         const isSearching = !!searchKeyword;
         const displayList = isSearching ? list : list.slice(0, 8);
-        renderProductGrid(sectionGrid, displayList);
 
-        // 상위 8개 초과 상품이 있으면 하단 더보기 버튼 추가
         if (!isSearching && list.length > 8) {
             const footerDiv = document.createElement('div');
             footerDiv.className = 'cat-section-footer';
             footerDiv.innerHTML = `
                 <button type="button" class="cat-footer-more-btn">
-                    ✨ ${catName} 랭킹 TOP 100 전체보기 (${list.length}개 상품) →
+                    ✨ ${escapeHtml(catName)} 랭킹 TOP 100 전체보기 (${list.length}개 상품) →
                 </button>
             `;
-            footerDiv.querySelector('button').addEventListener('click', () => {
-                selectCategory(catName);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            });
+            const footerBtn = footerDiv.querySelector('button');
+            if (footerBtn) {
+                footerBtn.addEventListener('click', () => {
+                    selectCategory(catName);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                });
+            }
             section.appendChild(footerDiv);
         }
 
@@ -417,9 +508,12 @@ function renderCategoryGroupedView(container, products) {
         }
 
         container.appendChild(section);
+
+        const sectionGrid = section.querySelector('.product-grid');
+        renderProductGrid(sectionGrid, displayList);
     });
 
-    // 직접 등록 상품 섹션 (있는 경우)
+    // 2. 직접 등록 상품 섹션 (있는 경우)
     const customList = groups['직접 등록'];
     if (customList && customList.length > 0) {
         const section = document.createElement('section');
@@ -437,21 +531,61 @@ function renderCategoryGroupedView(container, products) {
             </div>
             <div class="product-grid"></div>
         `;
+        const viewAllBtn = section.querySelector('.cat-view-all-btn');
+        if (viewAllBtn) {
+            viewAllBtn.addEventListener('click', () => {
+                selectCategory('직접 등록');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+        }
+        container.appendChild(section);
         const sectionGrid = section.querySelector('.product-grid');
         renderProductGrid(sectionGrid, customList);
-        section.querySelector('.cat-view-all-btn').addEventListener('click', () => {
-            selectCategory('직접 등록');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        });
-        container.appendChild(section);
     }
+
+    // 3. 기타 카테고리 (CATEGORY_LIST 및 '직접 등록' 외에 상품이 있는 경우)
+    Object.keys(groups).forEach(catName => {
+        if (CATEGORY_LIST.some(c => c.name === catName) || catName === '직접 등록') return;
+        const otherList = groups[catName];
+        if (!otherList || otherList.length === 0) return;
+
+        otherList.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+        const section = document.createElement('section');
+        section.className = 'category-section';
+        section.innerHTML = `
+            <div class="category-section-header">
+                <div class="cat-header-left">
+                    <span class="cat-header-icon">🏷️</span>
+                    <h2 class="cat-header-title">${escapeHtml(catName)}</h2>
+                    <span class="cat-header-badge">${otherList.length}개 상품</span>
+                </div>
+                <button type="button" class="cat-view-all-btn">
+                    ${escapeHtml(catName)} 전체보기 →
+                </button>
+            </div>
+            <div class="product-grid"></div>
+        `;
+        const viewAllBtn = section.querySelector('.cat-view-all-btn');
+        if (viewAllBtn) {
+            viewAllBtn.addEventListener('click', () => {
+                selectCategory(catName);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+        }
+        container.appendChild(section);
+        const sectionGrid = section.querySelector('.product-grid');
+        renderProductGrid(sectionGrid, otherList);
+    });
 }
 
 /**
  * 제품 그리드 요소 채우기
  */
 function renderProductGrid(targetGrid, products) {
+    if (!targetGrid) return;
     targetGrid.innerHTML = '';
+
+    if (!products || products.length === 0) return;
 
     products.forEach(prod => {
         const card = document.createElement('div');
@@ -478,11 +612,11 @@ function renderProductGrid(targetGrid, products) {
 
         // 가격 표시
         let priceHtml = '';
-        if (prod.currentPrice !== null) {
+        if (prod.currentPrice !== null && prod.currentPrice !== undefined && !isNaN(prod.currentPrice)) {
             priceHtml = `
                 <div class="card-price-row">
                     <span class="card-price-label">현재 가격</span>
-                    <div class="card-price">${prod.currentPrice.toLocaleString()}<span>원</span></div>
+                    <div class="card-price">${Number(prod.currentPrice).toLocaleString()}<span>원</span></div>
                 </div>
             `;
         } else {
@@ -494,13 +628,15 @@ function renderProductGrid(targetGrid, products) {
             `;
         }
 
+        const safeTitle = escapeHtml(prod.displayName || `상품 (${prod.goods_no})`);
+
         card.innerHTML = `
             <div>
                 <div class="card-badges-row">
                     ${rankBadgeHtml}
                     ${categoryBadgeHtml}
                 </div>
-                <h2 class="card-title" title="${escapeHtml(prod.displayName)}">${escapeHtml(prod.displayName)}</h2>
+                <h2 class="card-title" title="${safeTitle}">${safeTitle}</h2>
             </div>
             <div>
                 ${priceHtml}
@@ -824,10 +960,20 @@ function setupRegisterPage(registerForm) {
  */
 function escapeHtml(str) {
     if (!str) return '';
-    return str
+    return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 }
+
+// 개발 및 디버그용 전역 접근자
+window.trackingPriceApp = {
+    setViewMode,
+    selectCategory,
+    renderView,
+    initDashboard,
+    getAllProducts: () => allProducts
+};
+
