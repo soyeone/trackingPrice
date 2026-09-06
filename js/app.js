@@ -1148,48 +1148,219 @@ function renderHistoryTable(history) {
 /**
  * 등록 페이지 폼 처리 (register.html)
  */
+/**
+ * 등록 페이지 폼 처리 (register.html)
+ * 새 제품 등록 시 즉시 제품 정보 및 당일 가격을 기록하여 대시보드에서 바로 트래킹
+ */
 function setupRegisterPage(registerForm) {
-    registerForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const urlInput = document.getElementById('product-url').value;
-        const messageEl = document.getElementById('message');
+    const urlInput = document.getElementById('product-url');
+    const fetchBtn = document.getElementById('btn-fetch-info');
+    const previewSection = document.getElementById('product-preview-section');
+    const nameInput = document.getElementById('product-name');
+    const priceInput = document.getElementById('product-price');
+    const unitPriceBox = document.getElementById('preview-unit-price-box');
+    const unitPriceVal = document.getElementById('preview-unit-price-val');
+    const submitBtn = document.getElementById('btn-submit-register');
+    const messageEl = document.getElementById('message');
 
-        try {
-            const url = new URL(urlInput);
-            const goodsNo = url.searchParams.get('goodsNo');
-
-            if (!goodsNo) {
-                messageEl.textContent = '올바른 올리브영 상품 링크가 아닙니다 (goodsNo 파라미터를 찾을 수 없습니다).';
-                messageEl.style.color = '#f04452';
+    function updatePreviewUnitPrice() {
+        const name = nameInput ? nameInput.value.trim() : '';
+        const price = priceInput ? parseInt(priceInput.value, 10) : null;
+        if (name && price && price > 0) {
+            const cap = parseCapacity(name);
+            const unit = calculateUnitPrice(price, cap);
+            if (unit && unitPriceBox && unitPriceVal) {
+                unitPriceBox.style.display = 'block';
+                unitPriceVal.textContent = `${unit.display} (총 ${unit.capacityLabel})`;
                 return;
             }
+        }
+        if (unitPriceBox) unitPriceBox.style.display = 'none';
+    }
 
-            messageEl.textContent = '데이터베이스에 제품을 등록하는 중입니다...';
-            messageEl.style.color = '#3182f6';
+    if (nameInput) nameInput.addEventListener('input', updatePreviewUnitPrice);
+    if (priceInput) priceInput.addEventListener('input', updatePreviewUnitPrice);
 
-            const { data, error } = await supabaseClient
-                .from('products')
-                .insert([
-                    { goods_no: goodsNo, url: urlInput, is_custom: true }
-                ]);
+    // URL에서 goodsNo 파싱
+    function getGoodsNoFromUrl(str) {
+        if (!str) return null;
+        try {
+            const urlObj = new URL(str);
+            return urlObj.searchParams.get('goodsNo');
+        } catch (e) {
+            const match = str.match(/goodsNo=([A-Za-z0-9]+)/);
+            return match ? match[1] : null;
+        }
+    }
 
-            if (error) {
-                if (error.code === '23505') {
-                    messageEl.textContent = '이미 추적 목록에 등록되어 있는 상품입니다!';
-                    messageEl.style.color = '#f04452';
-                    return;
+    // 올리브영 실시간 상품 정보 조회
+    async function fetchProductDetails(goodsNo) {
+        if (previewSection) previewSection.style.display = 'block';
+        if (messageEl) {
+            messageEl.style.display = 'block';
+            messageEl.innerHTML = '<span style="color:#3182f6;">⏳ 올리브영 실시간 제품명 및 가격 조회 중...</span>';
+        }
+
+        try {
+            // 로컬 서버 API /api/scrape 시도
+            const res = await fetch(`/api/scrape?goodsNo=${encodeURIComponent(goodsNo)}`, {
+                signal: AbortSignal.timeout(6000)
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && (data.name || data.price)) {
+                    if (data.name && nameInput) nameInput.value = data.name;
+                    if (data.price && priceInput) priceInput.value = data.price;
+                    updatePreviewUnitPrice();
+                    if (messageEl) {
+                        messageEl.innerHTML = '<span style="color:#16a34a; font-weight:700;">✅ 올리브영 실시간 정보를 성공적으로 불러왔습니다!</span>';
+                    }
+                    return true;
                 }
-                throw error;
+            }
+        } catch (err) {
+            console.log('[등록] 로컬 스크래핑 API 미응답 또는 정적 호스팅 환경:', err.message);
+        }
+
+        if (messageEl) {
+            messageEl.innerHTML = '<span style="color:#64748b;">💡 제품명과 현재 가격을 확인 후 아래 버튼을 누르면 오늘부터 즉시 추적이 시작됩니다.</span>';
+        }
+        if (nameInput && !nameInput.value) {
+            nameInput.placeholder = `올리브영 상품 (${goodsNo})`;
+        }
+        return false;
+    }
+
+    // URL 변경 시 자동 조회 트리거
+    let fetchTimeout = null;
+    if (urlInput) {
+        urlInput.addEventListener('input', () => {
+            const goodsNo = getGoodsNoFromUrl(urlInput.value.trim());
+            if (goodsNo) {
+                clearTimeout(fetchTimeout);
+                fetchTimeout = setTimeout(() => {
+                    fetchProductDetails(goodsNo);
+                }, 500);
+            }
+        });
+    }
+
+    if (fetchBtn && urlInput) {
+        fetchBtn.addEventListener('click', () => {
+            const goodsNo = getGoodsNoFromUrl(urlInput.value.trim());
+            if (!goodsNo) {
+                alert('올바른 올리브영 상품 URL을 먼저 입력해주세요 (goodsNo 포함).');
+                urlInput.focus();
+                return;
+            }
+            fetchProductDetails(goodsNo);
+        });
+    }
+
+    // 등록 폼 제출 시
+    registerForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const urlValue = urlInput ? urlInput.value.trim() : '';
+        const goodsNo = getGoodsNoFromUrl(urlValue);
+
+        if (!goodsNo) {
+            if (messageEl) {
+                messageEl.style.display = 'block';
+                messageEl.innerHTML = '<span style="color:#f04452;">올바른 올리브영 상품 링크가 아닙니다 (goodsNo 파라미터를 찾을 수 없습니다).</span>';
+            }
+            return;
+        }
+
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = '🚀 데이터베이스 등록 및 즉시 트래킹 처리 중...';
+        }
+        if (messageEl) {
+            messageEl.style.display = 'block';
+            messageEl.innerHTML = '<span style="color:#3182f6;">데이터베이스에 상품 및 당일 가격 기록을 등록하는 중입니다...</span>';
+        }
+
+        let name = nameInput && nameInput.value.trim() ? nameInput.value.trim() : `올리브영 상품 (${goodsNo})`;
+        let price = priceInput && priceInput.value ? parseInt(priceInput.value, 10) : null;
+
+        try {
+            // 만약 아직 가격/이름 조회가 안 된 상태에서 등록을 눌렀다면 한 번 더 API 조회 시도
+            if (!price) {
+                try {
+                    const apiRes = await fetch(`/api/scrape?goodsNo=${encodeURIComponent(goodsNo)}`, { signal: AbortSignal.timeout(4000) });
+                    if (apiRes.ok) {
+                        const apiData = await apiRes.json();
+                        if (apiData.name) name = apiData.name;
+                        if (apiData.price) price = apiData.price;
+                    }
+                } catch (e) {}
             }
 
-            messageEl.textContent = `성공적으로 등록되었습니다! (상품번호: ${goodsNo}) 내일부터 자동으로 가격이 추적됩니다.`;
-            messageEl.style.color = '#7fa818';
-            document.getElementById('product-url').value = '';
+            // 1. products 테이블에 상품 등록 / 업데이트 (upsert)
+            const { error: prodError } = await supabaseClient
+                .from('products')
+                .upsert([
+                    { goods_no: goodsNo, name, url: urlValue, is_custom: true }
+                ], { onConflict: 'goods_no' });
+
+            if (prodError) throw prodError;
+
+            // 2. prices 테이블에 오늘 일자 가격 즉시 저장 (당일 트래킹 즉시 시작)
+            const today = new Date().toISOString().split('T')[0];
+            let priceRecorded = false;
+
+            if (price && price > 0) {
+                const { error: priceError } = await supabaseClient
+                    .from('prices')
+                    .upsert([
+                        { goods_no: goodsNo, price, date: today }
+                    ], { onConflict: 'goods_no,date' });
+
+                if (!priceError) {
+                    priceRecorded = true;
+                } else {
+                    console.warn('[등록] 가격 기록 upsert 오류:', priceError);
+                }
+            }
+
+            // 단위가격 계산
+            const cap = parseCapacity(name);
+            const unit = calculateUnitPrice(price, cap);
+            const unitPriceText = unit ? ` • ${unit.display}` : '';
+            const priceText = price ? `${price.toLocaleString()}원${unitPriceText}` : '수집 대기 중';
+
+            // 성공 UI 출력
+            if (messageEl) {
+                messageEl.innerHTML = `
+                    <div class="success-box">
+                        <div class="success-title">🎉 등록 완료 & 즉시 트래킹 시작!</div>
+                        <div class="success-name">${escapeHtml(name)}</div>
+                        <div class="success-price">기준 가격: <b>${priceText}</b> (기준일: ${today})</div>
+                        <div style="margin-top: 1.2rem;">
+                            <a href="index.html#goodsNo=${goodsNo}" class="btn-go-dashboard">
+                                📊 대시보드에서 가격 추이 확인하기 →
+                            </a>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // 입력 필드 초기화
+            if (urlInput) urlInput.value = '';
+            if (nameInput) nameInput.value = '';
+            if (priceInput) priceInput.value = '';
+            if (previewSection) previewSection.style.display = 'none';
 
         } catch (error) {
-            console.error(error);
-            messageEl.textContent = '등록 중 오류가 발생했습니다: ' + error.message;
-            messageEl.style.color = '#f04452';
+            console.error('[등록 오류]', error);
+            if (messageEl) {
+                messageEl.innerHTML = `<span style="color:#f04452;">등록 중 오류가 발생했습니다: ${escapeHtml(error.message)}</span>`;
+            }
+        } finally {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '⚡ 등록하고 즉시 트래킹 시작';
+            }
         }
     });
 }

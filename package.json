@@ -1,0 +1,13 @@
+{
+  "name": "tracking-price",
+  "version": "1.0.0",
+  "description": "올리브영 가격 및 가성비(단위가격) 자동 트래킹 대시보드",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "track": "node scraper/track_product.js"
+  },
+  "keywords": ["oliveyoung", "price-tracker"],
+  "author": "soyeone",
+  "license": "MIT"
+}

@@ -312,11 +312,50 @@ def main():
             except Exception:
                 continue
 
-    print(f"=== 완료! {success_count}개 상품 가격 데이터 저장 완료 ===")
+def track_single(target):
+    goods_no = target
+    if "goodsNo=" in target:
+        m = re.search(r"goodsNo=([A-Za-z0-9]+)", target)
+        if m:
+            goods_no = m.group(1)
+
+    print(f"[단일 상품 즉시 트래킹] 대상: {goods_no}")
+    item = fetch_single_product_detail(goods_no, target if target.startswith("http") else None)
+    if not item or not item.get('price'):
+        print(f"[오류] 상품 정보를 가져올 수 없습니다: {goods_no}")
+        return
+
+    today = date.today().isoformat()
+    # 1. products 테이블 등록/업데이트
+    try:
+        supabase.table('products').upsert({
+            'goods_no': item['goods_no'],
+            'name': item['name'],
+            'url': item['url'],
+            'is_custom': True
+        }, on_conflict='goods_no').execute()
+        print(f"  ✅ products 등록 완료: {item['name']}")
+    except Exception as e:
+        print(f"  ⚠️ products 등록 예외: {e}")
+
+    # 2. prices 테이블 오늘 가격 즉시 기록
+    try:
+        supabase.table('prices').upsert({
+            'goods_no': item['goods_no'],
+            'price': item['price'],
+            'date': today
+        }, on_conflict='goods_no,date').execute()
+        print(f"  ✅ prices 오늘({today}) 가격 기록 완료: {item['price']:,}원")
+        print(f"  🎉 즉시 트래킹 시작 완료!")
+    except Exception as e:
+        print(f"  ⚠️ prices 기록 예외: {e}")
 
 if __name__ == "__main__":
     try:
-        main()
+        if len(sys.argv) > 1:
+            track_single(sys.argv[1])
+        else:
+            main()
     except Exception as err:
         print(f"\n[FATAL ERROR] 실행 중 예외 발생:")
         traceback.print_exc()
