@@ -4,136 +4,195 @@ from bs4 import BeautifulSoup
 from supabase import create_client, Client
 from datetime import date
 import time
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# 환경 변수가 없으면 기본 Supabase 프로젝트 정보 사용
+DEFAULT_SUPABASE_URL = "https://lgdrqxsgmfighunegehv.supabase.co"
+DEFAULT_SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxnZHJxeHNnbWZpZ2h1bmVnZWh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2OTgwNDUsImV4cCI6MjEwNDI3NDA0NX0.CvJYLnbgt3C0PTBXBZoqopfoRRfT8KCTFYCnk8Pg594"
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("Supabase credentials not found in environment variables.")
-    exit(1)
+SUPABASE_URL = os.getenv("SUPABASE_URL") or DEFAULT_SUPABASE_URL
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") or DEFAULT_SUPABASE_KEY
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# 브라우저와 동일한 헤더 설정
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-def get_categories():
-    """올리브영 베스트 페이지에서 카테고리 목록(ID)을 추출합니다."""
-    url = "https://www.oliveyoung.co.kr/store/main/getBestList.do"
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
-        categories = []
-        # 카테고리 탭 (실제 사이트의 탭 리스트 선택자 확인 필요)
-        # 통상적으로 getBestList.do의 탭들에 dispCatNo가 있음
-        for a in soup.select('.best-cate-list button, .best-cate-list a, .cate_menu a'):
-            # href나 data-ref-dispcateno 등에서 추출
-            cat_no = a.get('data-ref-dispcateno')
-            if not cat_no and 'dispCatNo=' in a.get('href', ''):
-                cat_no = a.get('href').split('dispCatNo=')[1].split('&')[0]
-            if cat_no and cat_no not in categories and cat_no != '900000100100000': # '전체' 제외
-                categories.append(cat_no)
+# 올리브영 주요 대분류 카테고리 ID 목록
+# 10000010001: 스킨케어, 10000010009: 마스크팩, 10000010010: 클렌징, 10000010011: 선케어
+# 10000010002: 메이크업/네일, 10000010003: 바디케어, 10000010004: 헤어케어, 10000010005: 향수/디퓨저
+# 10000010008: 미용소품, 10000020001: 건강식품, 10000020002: 푸드, 10000030005: 구강/위생
+MAIN_CATEGORIES = [
+    ('전체', ''),
+    ('스킨케어', '10000010001'),
+    ('마스크팩', '10000010009'),
+    ('클렌징', '10000010010'),
+    ('선케어', '10000010011'),
+    ('메이크업/네일', '10000010002'),
+    ('바디케어', '10000010003'),
+    ('헤어케어', '10000010004'),
+    ('향수/디퓨저', '10000010005'),
+    ('건강식품', '10000020001'),
+]
+
+session = requests.Session()
+session.headers.update(HEADERS)
+
+def parse_items_from_html(html_text):
+    """HTML 텍스트에서 .prd_info 요소들을 파싱하여 상품 정보 목록을 반환합니다."""
+    soup = BeautifulSoup(html_text, 'html.parser')
+    items = []
+    
+    for prd in soup.select('.prd_info'):
+        try:
+            # 상품명 추출
+            name_el = prd.select_one('.prd_name .tx_name') or prd.select_one('.tx_name')
+            if not name_el:
+                continue
+            name = name_el.text.strip()
+            
+            # 가격 추출 (.tx_cur .tx_num)
+            price_el = prd.select_one('.prd_price .tx_cur .tx_num') or prd.select_one('.tx_cur .tx_num')
+            if not price_el:
+                continue
+            price_raw = price_el.text.replace(',', '').replace('원', '').strip()
+            if not price_raw.isdigit():
+                continue
+            price = int(price_raw)
+            
+            # goodsNo 추출
+            goods_no = None
+            thumb_a = prd.select_one('a.prd_thumb') or prd.select_one('a')
+            if thumb_a:
+                goods_no = thumb_a.get('data-ref-goodsno')
+                if not goods_no and 'goodsNo=' in thumb_a.get('href', ''):
+                    match = re.search(r'goodsNo=([A-Za-z0-9]+)', thumb_a.get('href', ''))
+                    if match:
+                        goods_no = match.group(1)
+            
+            if not goods_no:
+                cart_btn = prd.select_one('.cartBtn')
+                if cart_btn:
+                    goods_no = cart_btn.get('data-ref-goodsno')
+                    
+            if goods_no:
+                items.append({
+                    'goods_no': goods_no,
+                    'name': name,
+                    'price': price,
+                    'url': f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
+                })
+        except Exception as e:
+            continue
+            
+    return items
+
+def fetch_category_ranking(cat_name, cat_id):
+    """특정 카테고리의 랭킹 페이지를 조회합니다."""
+    if cat_id:
+        url = f"https://www.oliveyoung.co.kr/store/main/getBestList.do?dispCatNo={cat_id}&fltDispCatNo=&pageIdx=1&rowsPerPage=100"
+    else:
+        url = "https://www.oliveyoung.co.kr/store/main/getBestList.do"
         
-        # 카테고리 파싱 실패시 기본 카테고리(스킨케어, 메이크업, 바디, 헤어) ID 하드코딩 백업
-        if not categories:
-            categories = ['10000010001', '10000010002', '10000010003', '10000010004']
-        return categories
+    try:
+        res = session.get(url, timeout=15)
+        res.raise_for_status()
+        items = parse_items_from_html(res.text)
+        print(f"[{cat_name}] {len(items)}개 상품 수집 완료")
+        return items
     except Exception as e:
-        print(f"카테고리 수집 오류: {e}")
+        print(f"[{cat_name}] 수집 중 오류: {e}")
         return []
 
-def fetch_top_100(dispCatNo):
-    """특정 카테고리의 탑 100 제품 정보를 스크래핑합니다."""
-    url = f"https://www.oliveyoung.co.kr/store/main/getBestList.do?dispCatNo={dispCatNo}&fltDispCatNo=&pageIdx=1&rowsPerPage=100"
-    products = []
+def fetch_single_product_detail(goods_no, existing_url=None):
+    """사용자가 직접 등록한 단일 상품의 최신 가격을 조회합니다."""
+    url = existing_url or f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
     try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
+        res = session.get(url, timeout=15)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 상품 리스트 찾기
-        items = soup.select('.prd_info')
-        for item in items:
-            name_el = item.select_one('.tx_name')
-            price_el = item.select_one('.tx_cur .tx_num')
-            link_el = item.find_parent('a')
-            
-            if name_el and price_el and link_el:
-                name = name_el.text.strip()
-                price_str = price_el.text.replace(',', '').replace('원', '').strip()
-                href = link_el.get('href', '')
-                
-                # goodsNo 추출
-                goods_no = None
-                if 'goodsNo=' in href:
-                    goods_no = href.split('goodsNo=')[1].split('&')[0]
-                elif 'javascript:goodsDetail' in href:
-                    goods_no = href.split("'")[1]
-                
-                if goods_no and price_str.isdigit():
-                    products.append({
-                        'goods_no': goods_no,
-                        'name': name,
-                        'price': int(price_str),
-                        'url': f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
-                    })
-        return products
+        name_el = soup.select_one('.prd_info .prd_name') or soup.select_one('.prd_name') or soup.select_one('title')
+        name = name_el.text.strip() if name_el else f"상품 {goods_no}"
+        
+        price_el = soup.select_one('.price .sell_price') or soup.select_one('.price_num') or soup.select_one('.price-2')
+        if price_el:
+            price_str = price_el.text.replace(',', '').replace('원', '').strip()
+            if price_str.isdigit():
+                return {'goods_no': goods_no, 'name': name, 'price': int(price_str), 'url': url}
     except Exception as e:
-        print(f"[{dispCatNo}] 카테고리 탑 100 수집 오류: {e}")
-        return []
+        print(f"단일 상품 [{goods_no}] 상세 페이지 수집 오류: {e}")
+    return None
 
 def main():
     today = date.today().isoformat()
+    print(f"=== 올리브영 가격 스크래핑 시작 ({today}) ===")
     
-    # 1. 탑 100 크롤링
-    print("대분류 카테고리 탑 100 스크래핑 시작...")
-    categories = get_categories()
-    print(f"추출된 카테고리 수: {len(categories)}")
+    all_products = {}
     
-    scraped_data = {} # 중복 제거용 딕셔너리
-    
-    for cat_no in categories:
-        print(f"카테고리 {cat_no} 탑 100 수집 중...")
-        items = fetch_top_100(cat_no)
+    # 1. 주요 카테고리별 랭킹 100위 수집
+    for cat_name, cat_id in MAIN_CATEGORIES:
+        items = fetch_category_ranking(cat_name, cat_id)
         for item in items:
-            scraped_data[item['goods_no']] = item
-        time.sleep(1) # 차단 방지 딜레이
+            all_products[item['goods_no']] = item
+        time.sleep(1) # 요청 간 1초 딜레이
         
-    # 2. DB에서 사용자 직접 등록 제품 가져오기
-    print("DB에서 사용자 등록 상품 목록 조회 중...")
-    response = supabase.table('products').select('*').eq('is_custom', True).execute()
-    custom_products = response.data
+    # 2. 사용자가 직접 등록한 제품 (is_custom=True) 수집
+    try:
+        print("사용자 직접 등록 상품 조회 중...")
+        res = supabase.table('products').select('*').eq('is_custom', True).execute()
+        custom_list = res.data or []
+        print(f"사용자 등록 상품 수: {len(custom_list)}")
+        
+        for cp in custom_list:
+            g_no = cp['goods_no']
+            if g_no not in all_products:
+                print(f"사용자 등록 상품 [{g_no}] 개별 수집 시도...")
+                item = fetch_single_product_detail(g_no, cp.get('url'))
+                if item:
+                    item['is_custom'] = True
+                    all_products[g_no] = item
+                time.sleep(1)
+            else:
+                # 이미 랭킹에 있는 경우 is_custom 유지
+                all_products[g_no]['is_custom'] = True
+    except Exception as e:
+        print(f"사용자 등록 상품 처리 오류: {e}")
+
+    print(f"\n총 {len(all_products)}개 유니크 상품의 가격 데이터를 DB에 저장합니다.")
     
-    # 사용자 등록 제품 중 탑 100에 없으면 개별 스크래핑
-    # (실제 환경에서는 get_price 함수를 별도로 분리해서 사용하거나, 기존 코드를 유지)
-    
-    print(f"총 {len(scraped_data)}개의 유니크 상품 가격을 업데이트합니다.")
-    
-    for goods_no, info in scraped_data.items():
-        # products 테이블 갱신 (upsert)
+    # 3. Supabase DB에 저장
+    success_count = 0
+    for goods_no, item in all_products.items():
         try:
+            # products 테이블 업데이트
             supabase.table('products').upsert({
-                'goods_no': info['goods_no'],
-                'url': info['url'],
-                'name': info['name'],
-                'is_custom': False
+                'goods_no': item['goods_no'],
+                'name': item['name'],
+                'url': item['url'],
+                'is_custom': item.get('is_custom', False)
             }, on_conflict='goods_no').execute()
             
-            # prices 테이블 추가
+            # prices 테이블에 오늘의 가격 추가
             supabase.table('prices').insert({
-                'goods_no': info['goods_no'],
-                'price': info['price'],
+                'goods_no': item['goods_no'],
+                'price': item['price'],
                 'date': today
             }).execute()
-        except Exception as e:
-            pass # 중복 키 에러(오늘 이미 추가됨) 등은 무시
             
-    print("완료!")
+            success_count += 1
+        except Exception as e:
+            # 중복 날짜 가격 등은 조용히 패스
+            continue
+            
+    print(f"=== 완료! {success_count}개 상품 가격 저장 완료 ===")
 
 if __name__ == "__main__":
     main()
