@@ -27,6 +27,7 @@ let pricesByGoodsNo = {};
 let currentChart = null;
 let selectedCategory = 'all';     // 'all' 또는 특정 카테고리명
 let currentViewMode = 'grouped';   // 'grouped' (카테고리별 묶어보기, 기본값) 또는 'flat' (그리드)
+let currentSortMode = 'rank';      // 'rank' (랭킹순), 'unit_asc' (가성비순), 'price_asc', 'price_desc'
 let searchKeyword = '';
 
 /**
@@ -148,7 +149,7 @@ async function initDashboard() {
             pricesByGoodsNo[p.goods_no].push(p);
         });
 
-        // 각 제품별 통계 및 카테고리/랭킹 파싱
+        // 각 제품별 통계, 용량/단위가격, 카테고리/랭킹 파싱
         allProducts = rawProducts.map(prod => {
             const history = pricesByGoodsNo[prod.goods_no] || [];
             let currentPrice = null;
@@ -167,6 +168,8 @@ async function initDashboard() {
             }
 
             const { category, rank } = extractProductMeta(prod);
+            const capInfo = parseCapacity(prod.name);
+            const unitPriceInfo = calculateUnitPrice(currentPrice, capInfo);
 
             return {
                 ...prod,
@@ -177,7 +180,9 @@ async function initDashboard() {
                 minPrice,
                 maxPrice,
                 lastDate,
-                historyCount: history.length
+                historyCount: history.length,
+                capInfo,
+                unitPriceInfo
             };
         });
 
@@ -192,6 +197,17 @@ async function initDashboard() {
 
         if (btnViewFlat) {
             btnViewFlat.onclick = () => setViewMode('flat');
+        }
+
+        // 정렬 셀렉트 이벤트 바인딩
+        const sortSelect = document.getElementById('sort-select');
+        if (sortSelect) {
+            sortSelect.value = currentSortMode;
+            sortSelect.addEventListener('change', (e) => {
+                currentSortMode = e.target.value;
+                console.log('[대시보드] 정렬 기준 변경:', currentSortMode);
+                renderView();
+            });
         }
 
         // 검색 이벤트 리스너 등록
@@ -236,6 +252,202 @@ async function initDashboard() {
             loadingSpinner.innerHTML = `<p style="color:red; padding: 1.5rem; background: #fff0f0; border-radius: 8px;">데이터를 불러오는 중 오류가 발생했습니다: ${escapeHtml(err.message || String(err))}</p>`;
         }
     }
+}
+
+/**
+ * 상품명에서 정량적 용량/수량(ml, g, 매, 정, 포, 입, 캡슐 등) 추출
+ */
+function parseCapacity(name) {
+    if (!name) return null;
+
+    const isDouble = /(?:1\s*\+\s*1|더블\s*기획|더블기획|듀오\s*기획|듀오기획|2입\s*기획|2개입\s*기획|1더하기1)/i.test(name);
+
+    // 1. ml, l, g, kg 단위 먼저 매칭 (주요 액체/크림 제형 최우선)
+    // 1-1. ml/g 합산 표기: 50+50ml, 50ml+50ml, 60g+60g 등
+    const addVolumePattern = /([0-9]+(?:\.[0-9]+)?)\s*(ml|l|g|kg)?\s*\+\s*([0-9]+(?:\.[0-9]+)?)\s*(ml|l|g|kg)(?![a-zA-Z0-9])/i;
+    const addVolMatch = name.match(addVolumePattern);
+    if (addVolMatch) {
+        let v1 = parseFloat(addVolMatch[1]);
+        let v2 = parseFloat(addVolMatch[3]);
+        let unit = addVolMatch[4].toLowerCase();
+        if (unit === 'kg' || addVolMatch[2]?.toLowerCase() === 'kg') {
+            v1 = (addVolMatch[2]?.toLowerCase() === 'kg' || (!addVolMatch[2] && unit === 'kg')) ? v1 * 1000 : v1;
+            v2 = unit === 'kg' ? v2 * 1000 : v2;
+            unit = 'g';
+        } else if (unit === 'l' || addVolMatch[2]?.toLowerCase() === 'l') {
+            v1 = (addVolMatch[2]?.toLowerCase() === 'l' || (!addVolMatch[2] && unit === 'l')) ? v1 * 1000 : v1;
+            v2 = unit === 'l' ? v2 * 1000 : v2;
+            unit = 'ml';
+        }
+        const total = v1 + v2;
+        return { total, unit, label: `${total}${unit}` };
+    }
+
+    // 1-2. 리필 기획 증정 표기 e.g. "50ml ... (+50ml 리필)"
+    const refillPlusPattern = /([0-9]+(?:\.[0-9]+)?)\s*(ml|l|g|kg)\b[\s\S]*?\(\s*\+\s*([0-9]+(?:\.[0-9]+)?)\s*(ml|l|g|kg)/i;
+    const refillMatch = name.match(refillPlusPattern);
+    if (refillMatch && refillMatch[2].toLowerCase() === refillMatch[4].toLowerCase()) {
+        const v1 = parseFloat(refillMatch[1]);
+        const v2 = parseFloat(refillMatch[3]);
+        let unit = refillMatch[2].toLowerCase();
+        if (unit === 'kg') unit = 'g';
+        else if (unit === 'l') unit = 'ml';
+        const total = v1 + v2;
+        return { total, unit, label: `${total}${unit}` };
+    }
+
+    // 1-3. ml/g 곱산 표기: 50ml*2, 30ml x 2개 등
+    const mulVolumePattern = /([0-9]+(?:\.[0-9]+)?)\s*(ml|l|g|kg)\s*(?:[\*xX]|×)\s*([0-9]+)(?![a-zA-Z0-9])/i;
+    const mulVolMatch = name.match(mulVolumePattern);
+    if (mulVolMatch) {
+        let val = parseFloat(mulVolMatch[1]);
+        let unit = mulVolMatch[2].toLowerCase();
+        const qty = parseInt(mulVolMatch[3], 10);
+        if (unit === 'kg') { val *= 1000; unit = 'g'; }
+        else if (unit === 'l') { val *= 1000; unit = 'ml'; }
+        const total = val * qty;
+        return { total, unit, label: `${total}${unit}` };
+    }
+
+    // 1-4. 단일 ml/g 표기: 50ml, 100g, 1.5L 등
+    const singleVolPattern = /(?:^|[^\w\.])([0-9]+(?:\.[0-9]+)?)\s*(ml|l|g|kg)(?![a-zA-Z0-9])/i;
+    const singleVolMatch = name.match(singleVolPattern);
+    if (singleVolMatch) {
+        let val = parseFloat(singleVolMatch[1]);
+        let unit = singleVolMatch[2].toLowerCase();
+        if (unit === 'kg') { val *= 1000; unit = 'g'; }
+        else if (unit === 'l') { val *= 1000; unit = 'ml'; }
+        let total = isDouble ? val * 2 : val;
+        return { total, unit, label: `${total}${unit}` };
+    }
+
+    // 2. 수량/매수/정/포/개 단위 매칭 (마스크팩, 토너패드, 영양제 등)
+    // 2-1. 매/개 합산 표기: 100+100매, 70매+70매
+    const addItemPattern = /([0-9]+)\s*(매|개|정|포)?\s*\+\s*([0-9]+)\s*(매|개|정|포|입)(?![가-힣a-zA-Z0-9])/i;
+    const addItemMatch = name.match(addItemPattern);
+    if (addItemMatch) {
+        const v1 = parseInt(addItemMatch[1], 10);
+        const v2 = parseInt(addItemMatch[3], 10);
+        let unit = addItemMatch[4];
+        if (unit === '입') unit = '개';
+        const total = v1 + v2;
+        return { total, unit, label: `${total}${unit}` };
+    }
+
+    // 2-2. 매/개 곱산 표기: 100매x2개입, 60정*2
+    const mulItemPattern = /([0-9]+)\s*(매|개|정|포|캡슐)\s*(?:[\*xX]|×)\s*([0-9]+)(?:개|매|입)?(?![가-힣a-zA-Z0-9])/i;
+    const mulItemMatch = name.match(mulItemPattern);
+    if (mulItemMatch) {
+        const val = parseInt(mulItemMatch[1], 10);
+        let unit = mulItemMatch[2];
+        const qty = parseInt(mulItemMatch[3], 10);
+        const total = val * qty;
+        return { total, unit, label: `${total}${unit}` };
+    }
+
+    // 2-3. 단일 매/개/정/포/입/캡슐 표기 (뒤에 다른 한글이 붙지 않아야 함: 포밍, 개선, 정품 등 제외)
+    const singleItemPattern = /(?:^|[^0-9])([0-9]+)\s*(?:(개입|매입)|(매|개|정|포|캡슐|입))(?![가-힣a-zA-Z0-9])/i;
+    const singleItemMatch = name.match(singleItemPattern);
+    if (singleItemMatch) {
+        const val = parseInt(singleItemMatch[1], 10);
+        let rawUnit = singleItemMatch[2] || singleItemMatch[3];
+        let unit = rawUnit.replace('입', '') || '개';
+        if (rawUnit === '개입') unit = '개';
+        if (rawUnit === '매입') unit = '매';
+        let total = isDouble ? val * 2 : val;
+        return { total, unit, label: `${total}${unit}` };
+    }
+
+    return null;
+}
+
+/**
+ * 용량 정보 및 현재 가격을 바탕으로 단위 가격 계산 (10ml당, 10g당, 1매당, 개당 등)
+ */
+function calculateUnitPrice(price, capInfo) {
+    if (!price || !capInfo || !capInfo.total || capInfo.total <= 0) return null;
+
+    const { total, unit } = capInfo;
+
+    if (unit === 'ml') {
+        const per10ml = Math.round((price / total) * 10);
+        return {
+            unitLabel: '10ml당',
+            unitPrice: per10ml,
+            display: `10ml당 ${per10ml.toLocaleString()}원`,
+            capacityLabel: `${total.toLocaleString()}ml`
+        };
+    } else if (unit === 'g') {
+        const per10g = Math.round((price / total) * 10);
+        return {
+            unitLabel: '10g당',
+            unitPrice: per10g,
+            display: `10g당 ${per10g.toLocaleString()}원`,
+            capacityLabel: `${total.toLocaleString()}g`
+        };
+    } else if (unit === '매') {
+        const perItem = Math.round(price / total);
+        return {
+            unitLabel: '1매당',
+            unitPrice: perItem,
+            display: `1매당 ${perItem.toLocaleString()}원`,
+            capacityLabel: `${total.toLocaleString()}매`
+        };
+    } else if (unit === '정' || unit === '캡슐') {
+        const perItem = Math.round(price / total);
+        return {
+            unitLabel: '1정당',
+            unitPrice: perItem,
+            display: `1정당 ${perItem.toLocaleString()}원`,
+            capacityLabel: `${total.toLocaleString()}정`
+        };
+    } else if (unit === '포') {
+        const perItem = Math.round(price / total);
+        return {
+            unitLabel: '1포당',
+            unitPrice: perItem,
+            display: `1포당 ${perItem.toLocaleString()}원`,
+            capacityLabel: `${total.toLocaleString()}포`
+        };
+    } else if (unit === '개' || unit === '입') {
+        const perItem = Math.round(price / total);
+        return {
+            unitLabel: '개당',
+            unitPrice: perItem,
+            display: `개당 ${perItem.toLocaleString()}원`,
+            capacityLabel: `${total.toLocaleString()}개`
+        };
+    }
+
+    return null;
+}
+
+/**
+ * 정렬 기준에 따라 제품 리스트 정렬
+ */
+function sortProducts(list, sortMode) {
+    return [...list].sort((a, b) => {
+        if (sortMode === 'unit_asc') {
+            // 가성비순: 단위 가격 정보가 있는 제품 우선, 단위가격 낮은 순
+            const uA = a.unitPriceInfo ? a.unitPriceInfo.unitPrice : 999999999;
+            const uB = b.unitPriceInfo ? b.unitPriceInfo.unitPrice : 999999999;
+            if (uA !== uB) return uA - uB;
+            return (a.rank || 9999) - (b.rank || 9999);
+        } else if (sortMode === 'price_asc') {
+            const pA = (a.currentPrice !== null && a.currentPrice !== undefined) ? a.currentPrice : 999999999;
+            const pB = (b.currentPrice !== null && b.currentPrice !== undefined) ? b.currentPrice : 999999999;
+            if (pA !== pB) return pA - pB;
+            return (a.rank || 9999) - (b.rank || 9999);
+        } else if (sortMode === 'price_desc') {
+            const pA = (a.currentPrice !== null && a.currentPrice !== undefined) ? a.currentPrice : 0;
+            const pB = (b.currentPrice !== null && b.currentPrice !== undefined) ? b.currentPrice : 0;
+            if (pA !== pB) return pB - pA;
+            return (a.rank || 9999) - (b.rank || 9999);
+        } else {
+            // 기본 랭킹순
+            return (a.rank || 9999) - (b.rank || 9999);
+        }
+    });
 }
 
 /**
@@ -424,14 +636,10 @@ function renderView() {
             categoryFiltered = filtered.filter(p => p.category === selectedCategory);
         }
 
-        // 랭킹 순 정렬
-        categoryFiltered.sort((a, b) => {
-            const rankA = a.rank || 9999;
-            const rankB = b.rank || 9999;
-            return rankA - rankB;
-        });
+        // 선택된 정렬 기준(랭킹순, 가성비순, 가격순) 적용
+        const sortedProducts = sortProducts(categoryFiltered, currentSortMode);
 
-        renderProductGrid(flatGrid, categoryFiltered);
+        renderProductGrid(flatGrid, sortedProducts);
     }
 }
 
@@ -455,8 +663,8 @@ function renderCategoryGroupedView(container, products) {
         const list = groups[catName];
         if (!list || list.length === 0) return;
 
-        // 랭킹 순 정렬
-        list.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+        // 선택된 정렬 기준 적용
+        const sortedList = sortProducts(list, currentSortMode);
 
         const section = document.createElement('section');
         section.className = 'category-section';
@@ -466,7 +674,7 @@ function renderCategoryGroupedView(container, products) {
                 <div class="cat-header-left">
                     <span class="cat-header-icon">${catMeta.icon}</span>
                     <h2 class="cat-header-title">${escapeHtml(catName)}</h2>
-                    <span class="cat-header-badge">${list.length}개 상품</span>
+                    <span class="cat-header-badge">${sortedList.length}개 상품</span>
                 </div>
                 <button type="button" class="cat-view-all-btn" data-cat="${escapeHtml(catName)}">
                     ${escapeHtml(catName)} 전체 100위 보기 →
@@ -479,14 +687,14 @@ function renderCategoryGroupedView(container, products) {
 
         // 상위 8개 초과 상품이 있으면 하단 더보기 버튼 추가
         const isSearching = !!searchKeyword;
-        const displayList = isSearching ? list : list.slice(0, 8);
+        const displayList = isSearching ? sortedList : sortedList.slice(0, 8);
 
-        if (!isSearching && list.length > 8) {
+        if (!isSearching && sortedList.length > 8) {
             const footerDiv = document.createElement('div');
             footerDiv.className = 'cat-section-footer';
             footerDiv.innerHTML = `
                 <button type="button" class="cat-footer-more-btn">
-                    ✨ ${escapeHtml(catName)} 랭킹 TOP 100 전체보기 (${list.length}개 상품) →
+                    ✨ ${escapeHtml(catName)} 랭킹 TOP 100 전체보기 (${sortedList.length}개 상품) →
                 </button>
             `;
             const footerBtn = footerDiv.querySelector('button');
@@ -516,6 +724,7 @@ function renderCategoryGroupedView(container, products) {
     // 2. 직접 등록 상품 섹션 (있는 경우)
     const customList = groups['직접 등록'];
     if (customList && customList.length > 0) {
+        const sortedCustomList = sortProducts(customList, currentSortMode);
         const section = document.createElement('section');
         section.className = 'category-section';
         section.innerHTML = `
@@ -523,7 +732,7 @@ function renderCategoryGroupedView(container, products) {
                 <div class="cat-header-left">
                     <span class="cat-header-icon">📌</span>
                     <h2 class="cat-header-title">직접 등록 상품</h2>
-                    <span class="cat-header-badge">${customList.length}개 상품</span>
+                    <span class="cat-header-badge">${sortedCustomList.length}개 상품</span>
                 </div>
                 <button type="button" class="cat-view-all-btn">
                     직접 등록 상품 전체보기 →
@@ -540,7 +749,7 @@ function renderCategoryGroupedView(container, products) {
         }
         container.appendChild(section);
         const sectionGrid = section.querySelector('.product-grid');
-        renderProductGrid(sectionGrid, customList);
+        renderProductGrid(sectionGrid, sortedCustomList);
     }
 
     // 3. 기타 카테고리 (CATEGORY_LIST 및 '직접 등록' 외에 상품이 있는 경우)
@@ -549,7 +758,7 @@ function renderCategoryGroupedView(container, products) {
         const otherList = groups[catName];
         if (!otherList || otherList.length === 0) return;
 
-        otherList.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+        const sortedOtherList = sortProducts(otherList, currentSortMode);
         const section = document.createElement('section');
         section.className = 'category-section';
         section.innerHTML = `
@@ -557,7 +766,7 @@ function renderCategoryGroupedView(container, products) {
                 <div class="cat-header-left">
                     <span class="cat-header-icon">🏷️</span>
                     <h2 class="cat-header-title">${escapeHtml(catName)}</h2>
-                    <span class="cat-header-badge">${otherList.length}개 상품</span>
+                    <span class="cat-header-badge">${sortedOtherList.length}개 상품</span>
                 </div>
                 <button type="button" class="cat-view-all-btn">
                     ${escapeHtml(catName)} 전체보기 →
@@ -574,7 +783,7 @@ function renderCategoryGroupedView(container, products) {
         }
         container.appendChild(section);
         const sectionGrid = section.querySelector('.product-grid');
-        renderProductGrid(sectionGrid, otherList);
+        renderProductGrid(sectionGrid, sortedOtherList);
     });
 }
 
@@ -610,20 +819,38 @@ function renderProductGrid(targetGrid, products) {
         // 카테고리 배지
         const categoryBadgeHtml = prod.category ? `<span class="badge-category">${escapeHtml(prod.category)}</span>` : '';
 
-        // 가격 표시
+        // 가격 및 단위 가격 표시
         let priceHtml = '';
         if (prod.currentPrice !== null && prod.currentPrice !== undefined && !isNaN(prod.currentPrice)) {
+            let unitPriceHtml = '';
+            if (prod.unitPriceInfo) {
+                unitPriceHtml = `
+                    <div class="card-unit-price-row" title="단위 용량당 환산 가격">
+                        <div class="unit-price-main">
+                            <span class="unit-tag">${escapeHtml(prod.unitPriceInfo.unitLabel)}</span>
+                            <span class="unit-val">${prod.unitPriceInfo.unitPrice.toLocaleString()}원</span>
+                        </div>
+                        <span class="capacity-total-tag">총 ${escapeHtml(prod.unitPriceInfo.capacityLabel)}</span>
+                    </div>
+                `;
+            }
+
             priceHtml = `
-                <div class="card-price-row">
-                    <span class="card-price-label">현재 가격</span>
-                    <div class="card-price">${Number(prod.currentPrice).toLocaleString()}<span>원</span></div>
+                <div class="card-price-section">
+                    <div class="card-price-row">
+                        <span class="card-price-label">현재 가격</span>
+                        <div class="card-price">${Number(prod.currentPrice).toLocaleString()}<span>원</span></div>
+                    </div>
+                    ${unitPriceHtml}
                 </div>
             `;
         } else {
             priceHtml = `
-                <div class="card-price-row">
-                    <span class="card-price-label">가격 정보</span>
-                    <span style="font-size:0.85rem; color:#8b95a1;">수집 대기 중</span>
+                <div class="card-price-section">
+                    <div class="card-price-row">
+                        <span class="card-price-label">가격 정보</span>
+                        <span style="font-size:0.85rem; color:#8b95a1;">수집 대기 중</span>
+                    </div>
                 </div>
             `;
         }
@@ -716,6 +943,7 @@ function showDetailView(goodsNo) {
 
     const curValEl = document.getElementById('metric-current');
     const curDateEl = document.getElementById('metric-current-date');
+    const unitPriceEl = document.getElementById('metric-unit-price');
     const minValEl = document.getElementById('metric-min');
     const minDiffEl = document.getElementById('metric-min-diff');
     const maxValEl = document.getElementById('metric-max');
@@ -729,6 +957,16 @@ function showDetailView(goodsNo) {
         const maxPrice = Math.max(...history.map(h => h.price));
 
         curValEl.textContent = `${curPrice.toLocaleString()}원`;
+
+        if (product.unitPriceInfo) {
+            if (unitPriceEl) {
+                unitPriceEl.style.display = 'inline-block';
+                unitPriceEl.textContent = `💡 ${product.unitPriceInfo.unitLabel} ${product.unitPriceInfo.unitPrice.toLocaleString()}원 (총 ${product.unitPriceInfo.capacityLabel})`;
+            }
+        } else {
+            if (unitPriceEl) unitPriceEl.style.display = 'none';
+        }
+
         curDateEl.textContent = `기준일: ${curDate}`;
 
         minValEl.textContent = `${minPrice.toLocaleString()}원`;
@@ -746,6 +984,7 @@ function showDetailView(goodsNo) {
         histCountEl.textContent = `총 ${history.length}회 수집됨`;
     } else {
         curValEl.textContent = '수집 대기 중';
+        if (unitPriceEl) unitPriceEl.style.display = 'none';
         curDateEl.textContent = '-';
         minValEl.textContent = '-';
         minDiffEl.textContent = '-';

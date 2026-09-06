@@ -47,13 +47,23 @@
                     <div class="search-stats" id="search-stats">
                         추적 중인 제품을 불러왔습니다.
                     </div>
-                    <div class="view-mode-toggles">
-                        <button type="button" id="btn-view-grouped" class="view-mode-btn active">
-                            <span class="icon">📂</span> 카테고리별 묶어보기
-                        </button>
-                        <button type="button" id="btn-view-flat" class="view-mode-btn">
-                            <span class="icon">▦</span> 전체 그리드
-                        </button>
+                    <div class="toolbar-actions">
+                        <div class="sort-select-wrapper">
+                            <select id="sort-select" class="sort-select" title="제품 정렬 기준 선택">
+                                <option value="rank">👑 랭킹순</option>
+                                <option value="unit_asc">⚡ 가성비순 (단위가격 낮은순)</option>
+                                <option value="price_asc">📉 가격 낮은순</option>
+                                <option value="price_desc">📈 가격 높은순</option>
+                            </select>
+                        </div>
+                        <div class="view-mode-toggles">
+                            <button type="button" id="btn-view-grouped" class="view-mode-btn active">
+                                <span class="icon">📂</span> 카테고리별 묶어보기
+                            </button>
+                            <button type="button" id="btn-view-flat" class="view-mode-btn">
+                                <span class="icon">▦</span> 전체 그리드
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -105,6 +115,7 @@
                     <div class="metric-card current">
                         <div class="metric-label">현재 가격</div>
                         <div class="metric-value" id="metric-current">-</div>
+                        <div class="metric-unit-price" id="metric-unit-price" style="display:none;"></div>
                         <div class="metric-sub" id="metric-current-date">최근 갱신일</div>
                     </div>
                     <div class="metric-card min">
