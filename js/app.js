@@ -1,11 +1,10 @@
 // Supabase 설정 (사용자가 직접 채워넣어야 함)
-const SUPABASE_URL = 'https://lgdrqxsgmfighunegehv.supabase.co/rest/v1/';
+const SUPABASE_URL = 'https://lgdrqxsgmfighunegehv.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxnZHJxeHNnbWZpZ2h1bmVnZWh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2OTgwNDUsImV4cCI6MjEwNDI3NDA0NX0.CvJYLnbgt3C0PTBXBZoqopfoRRfT8KCTFYCnk8Pg594';
 
 // Supabase 클라이언트 초기화
-// 사용자가 설정을 안했으면 동작 안함
 let supabase;
-if (SUPABASE_URL !== 'https://lgdrqxsgmfighunegehv.supabase.co/rest/v1/') {
+if (SUPABASE_URL && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
     supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 
