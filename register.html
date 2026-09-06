@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>제품 등록 - Olive Young Price Tracker</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <header>
+        <h1>올리브영 가격 추적기</h1>
+        <nav>
+            <a href="index.html">대시보드</a>
+            <a href="register.html">제품 등록</a>
+        </nav>
+    </header>
+    <main>
+        <h2>새로운 제품 추적하기</h2>
+        <form id="register-form">
+            <label for="product-url">올리브영 상품 URL:</label>
+            <input type="url" id="product-url" name="product-url" placeholder="https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=..." required>
+            <button type="submit">등록하기</button>
+        </form>
+        <p id="message"></p>
+    </main>
+    <script src="js/app.js"></script>
+</body>
+</html>
