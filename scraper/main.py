@@ -227,59 +227,91 @@ def main():
             all_products[item['goods_no']] = item
         time.sleep(1)
         
-    # 2. 사용자가 직접 등록한 제품 수집
+    # 2. DB에 등록된 모든 기존 상품 확인 (100위 밖으로 밀려난 상품 + 직접 등록 상품도 누락 없이 가격 추적)
     try:
-        print("사용자 직접 등록 상품 목록 조회 중...")
-        res = supabase.table('products').select('*').eq('is_custom', True).execute()
-        custom_list = res.data or []
-        print(f"사용자 등록 상품 수: {len(custom_list)}")
-        
-        for cp in custom_list:
-            g_no = cp['goods_no']
-            if g_no not in all_products:
-                print(f"사용자 등록 상품 [{g_no}] 개별 가격 수집 중...")
-                item = fetch_single_product_detail(g_no, cp.get('url'))
-                if item:
-                    item['is_custom'] = True
-                    all_products[g_no] = item
-                time.sleep(1)
-            else:
-                all_products[g_no]['is_custom'] = True
-    except Exception as e:
-        print(f"사용자 등록 상품 처리 오류: {e}")
+        print("DB에 등록된 기존 추적 상품 목록 조회 중...")
+        all_db_products = []
+        from_idx = 0
+        batch_size = 1000
+        while True:
+            res = supabase.table('products').select('goods_no, name, url, is_custom').range(from_idx, from_idx + batch_size - 1).execute()
+            batch = res.data or []
+            if not batch:
+                break
+            all_db_products.extend(batch)
+            if len(batch) < batch_size:
+                break
+            from_idx += batch_size
 
-    print(f"\n총 {len(all_products)}개 유니크 상품의 가격 데이터를 DB에 저장합니다.")
-    
-    # 3. Supabase DB에 저장
+        print(f"DB 등록 기존 상품 총 {len(all_db_products)}개")
+
+        # 오늘의 12개 카테고리 TOP 100에 포함되지 않은 상품 식별
+        out_of_ranking_products = [p for p in all_db_products if p['goods_no'] not in all_products]
+        print(f"오늘 TOP 100 순위 밖이지만 지속 추적할 기존 상품 수: {len(out_of_ranking_products)}개")
+
+        for p in out_of_ranking_products:
+            g_no = p['goods_no']
+            orig_url = p.get('url') or ''
+            # 100위권 밖으로 밀려난 경우 URL의 &rank=... 파라미터만 제거하고 카테고리 정보는 유지
+            updated_url = re.sub(r'&rank=[0-9]+', '', orig_url)
+
+            item = fetch_single_product_detail(g_no, updated_url)
+            if item:
+                item['name'] = p.get('name') or item.get('name')
+                item['is_custom'] = p.get('is_custom', False)
+                item['url'] = updated_url
+                all_products[g_no] = item
+            else:
+                # 상세 페이지 파싱 실패 시에도 기존 URL 정보 보존
+                pass
+            time.sleep(0.3)
+    except Exception as e:
+        print(f"기존 등록 상품 지속 추적 처리 오류: {e}")
+
+    print(f"\n총 {len(all_products)}개 상품(신규 진입 + 기존 100위 유지 + 100위 이탈 추적)의 가격 데이터를 DB에 저장합니다.")
+
+    # 3. Supabase DB에 저장 (신규 상품은 자동 insert, 기존 상품은 update, 일일 가격 insert)
     success_count = 0
     for goods_no, item in all_products.items():
         try:
-            # 제품 존재 여부 확인 후 삽입 또는 갱신
+            # 3-1. 제품 존재 여부 확인 후 신규 삽입 또는 정보 갱신
             check_res = supabase.table('products').select('id').eq('goods_no', item['goods_no']).execute()
             if check_res.data and len(check_res.data) > 0:
+                # 기존 등록 제품: 최신 제품명과 랭킹/URL 갱신
                 supabase.table('products').update({
                     'name': item['name'],
                     'url': item['url']
                 }).eq('goods_no', item['goods_no']).execute()
             else:
+                # 100위권에 새로 진입한 신규 제품: 자동 등록!
                 supabase.table('products').insert({
                     'goods_no': item['goods_no'],
                     'name': item['name'],
                     'url': item['url'],
                     'is_custom': item.get('is_custom', False)
                 }).execute()
-            
-            # 가격 테이블에 오늘 가격 삽입
-            supabase.table('prices').insert({
+
+            # 3-2. 일별 가격 테이블에 오늘 가격 기록
+            # 동일 날짜 중복 실행 시에도 안전하도록 처리
+            supabase.table('prices').upsert({
                 'goods_no': item['goods_no'],
                 'price': item['price'],
                 'date': today
-            }).execute()
-            
+            }, on_conflict='goods_no,date').execute()
+
             success_count += 1
-        except Exception:
-            continue
-            
+        except Exception as err:
+            # upsert 지원 제약 시 fallback 일반 insert 시도
+            try:
+                supabase.table('prices').insert({
+                    'goods_no': item['goods_no'],
+                    'price': item['price'],
+                    'date': today
+                }).execute()
+                success_count += 1
+            except Exception:
+                continue
+
     print(f"=== 완료! {success_count}개 상품 가격 데이터 저장 완료 ===")
 
 if __name__ == "__main__":
