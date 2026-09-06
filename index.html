@@ -37,19 +37,43 @@
             <div class="search-section">
                 <div class="search-bar-wrapper">
                     <span class="search-icon">🔍</span>
-                    <input type="text" id="search-input" placeholder="제품명 또는 상품번호(예: A000000...)를 검색하세요" autocomplete="off" />
+                    <input type="text" id="search-input" placeholder="제품명, 브랜드 또는 상품번호(예: A000000...)를 검색하세요" autocomplete="off" />
                     <button id="clear-search-btn" class="clear-btn" style="display:none;">✕</button>
                 </div>
-                <div class="search-stats" id="search-stats">
-                    추적 중인 제품을 불러왔습니다.
+                <div class="search-stats-row">
+                    <div class="search-stats" id="search-stats">
+                        추적 중인 제품을 불러왔습니다.
+                    </div>
+                    <div class="view-mode-toggles">
+                        <button type="button" id="btn-view-grouped" class="view-mode-btn active">
+                            <span class="icon">📂</span> 카테고리별 묶어보기
+                        </button>
+                        <button type="button" id="btn-view-flat" class="view-mode-btn">
+                            <span class="icon">▦</span> 전체 그리드
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            <div id="product-grid" class="product-grid">
+            <!-- 카테고리 필터 탭 바 -->
+            <nav class="category-nav-wrapper">
+                <div id="category-filter-bar" class="category-filter-bar">
+                    <!-- 자바스크립트로 카테고리 탭들이 동적으로 렌더링됩니다 -->
+                </div>
+            </nav>
+
+            <!-- 카테고리별 묶어보기 뷰 -->
+            <div id="category-grouped-container" class="category-grouped-container">
+                <!-- 자바스크립트로 각 카테고리 섹션들이 렌더링됩니다 -->
+            </div>
+
+            <!-- 단일 카테고리 / 전체 그리드 뷰 -->
+            <div id="product-grid" class="product-grid" style="display:none;">
                 <!-- 자바스크립트로 제품 카드들이 동적으로 렌더링됩니다 -->
             </div>
+
             <div id="no-results-msg" class="no-results" style="display:none;">
-                <p>검색 조건과 일치하는 제품이 없습니다.</p>
+                <p>🔍 검색 조건과 일치하는 제품이 없습니다.</p>
             </div>
         </section>
 

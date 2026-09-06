@@ -62,26 +62,29 @@ HEADERS = {
 }
 
 MAIN_CATEGORIES = [
-    ('전체', ''),
     ('스킨케어', '10000010001'),
     ('마스크팩', '10000010009'),
     ('클렌징', '10000010010'),
     ('선케어', '10000010011'),
-    ('메이크업/네일', '10000010002'),
-    ('바디케어', '10000010003'),
+    ('메이크업', '10000010002'),
+    ('더모 코스메틱', '10000010008'),
     ('헤어케어', '10000010004'),
+    ('바디케어', '10000010003'),
     ('향수/디퓨저', '10000010005'),
     ('건강식품', '10000020001'),
+    ('구강용품', '10000020003'),
+    ('맨즈에딧', '10000010007'),
 ]
 
 session = requests.Session()
 session.headers.update(HEADERS)
 
-def parse_items_from_html(html_text):
+def parse_items_from_html(html_text, cat_name='', cat_id=''):
+    import urllib.parse
     soup = BeautifulSoup(html_text, 'html.parser')
     items = []
     
-    for prd in soup.select('.prd_info'):
+    for idx, prd in enumerate(soup.select('.prd_info'), start=1):
         try:
             name_el = prd.select_one('.prd_name .tx_name') or prd.select_one('.tx_name')
             if not name_el:
@@ -111,11 +114,19 @@ def parse_items_from_html(html_text):
                     goods_no = cart_btn.get('data-ref-goodsno')
                     
             if goods_no:
+                rank = idx
+                rank_el = prd.select_one('.thumb_flag')
+                if rank_el and rank_el.text.strip().isdigit():
+                    rank = int(rank_el.text.strip())
+                
+                cat_param = f"&dispCatNo={cat_id}&catName={urllib.parse.quote(cat_name)}&rank={rank}" if cat_name else ""
                 items.append({
                     'goods_no': goods_no,
                     'name': name,
                     'price': price,
-                    'url': f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
+                    'rank': rank,
+                    'category': cat_name,
+                    'url': f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}{cat_param}"
                 })
         except Exception:
             continue
@@ -124,14 +135,14 @@ def parse_items_from_html(html_text):
 
 def fetch_category_ranking(cat_name, cat_id):
     if cat_id:
-        url = f"https://www.oliveyoung.co.kr/store/main/getBestList.do?dispCatNo={cat_id}&fltDispCatNo=&pageIdx=1&rowsPerPage=100"
+        url = f"https://www.oliveyoung.co.kr/store/main/getBestList.do?dispCatNo=900000100100001&fltDispCatNo={cat_id}&pageIdx=1&rowsPerPage=100"
     else:
         url = "https://www.oliveyoung.co.kr/store/main/getBestList.do"
         
     try:
         res = session.get(url, timeout=15)
         res.raise_for_status()
-        items = parse_items_from_html(res.text)
+        items = parse_items_from_html(res.text, cat_name, cat_id)
         print(f"[{cat_name}] {len(items)}개 상품 수집 완료")
         return items
     except Exception as e:
