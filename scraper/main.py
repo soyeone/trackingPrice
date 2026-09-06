@@ -1,22 +1,58 @@
 import os
-import requests
-from bs4 import BeautifulSoup
-from supabase import create_client, Client
-from datetime import date
+import sys
 import time
 import re
+from datetime import date
+import traceback
+import requests
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 환경 변수가 없으면 기본 Supabase 프로젝트 정보 사용
+# 환경 변수가 없거나 유효하지 않을 때 사용할 기본 Supabase 프로젝트 정보
 DEFAULT_SUPABASE_URL = "https://lgdrqxsgmfighunegehv.supabase.co"
 DEFAULT_SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxnZHJxeHNnbWZpZ2h1bmVnZWh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2OTgwNDUsImV4cCI6MjEwNDI3NDA0NX0.CvJYLnbgt3C0PTBXBZoqopfoRRfT8KCTFYCnk8Pg594"
 
-SUPABASE_URL = os.getenv("SUPABASE_URL") or DEFAULT_SUPABASE_URL
-SUPABASE_KEY = os.getenv("SUPABASE_KEY") or DEFAULT_SUPABASE_KEY
+def clean_credentials():
+    raw_url = os.getenv("SUPABASE_URL") or DEFAULT_SUPABASE_URL
+    raw_key = os.getenv("SUPABASE_KEY") or DEFAULT_SUPABASE_KEY
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    # 앞뒤 공백 및 따옴표 제거
+    url = raw_url.strip().strip('"').strip("'")
+    if "/rest/v1" in url:
+        url = url.split("/rest/v1")[0]
+    url = url.rstrip("/")
+
+    key = raw_key.strip().strip('"').strip("'")
+    return url, key
+
+try:
+    from supabase import create_client, Client
+except ImportError:
+    print("[ERROR] supabase 패키지를 import할 수 없습니다.")
+    traceback.print_exc()
+    sys.exit(1)
+
+target_url, target_key = clean_credentials()
+print(f"Supabase 연결 시도 대상 URL: {target_url}")
+
+try:
+    supabase: Client = create_client(target_url, target_key)
+    # 간단한 연결 테스트
+    _ = supabase.table('products').select('id').limit(1).execute()
+    print("Supabase 클라이언트 초기화 및 연결 성공!")
+except Exception as e:
+    print(f"[경고] 제공된 Secret으로 Supabase 연결 실패: {e}")
+    print("기본 URL 및 API Key로 폴백(Fallback) 연결을 시도합니다...")
+    try:
+        supabase: Client = create_client(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_KEY)
+        _ = supabase.table('products').select('id').limit(1).execute()
+        print("기본 Supabase 정보로 연결 성공!")
+    except Exception as e2:
+        print(f"[FATAL] Supabase 연결 완전 실패: {e2}")
+        traceback.print_exc()
+        sys.exit(1)
 
 # 브라우저와 동일한 헤더 설정
 HEADERS = {
@@ -25,10 +61,6 @@ HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-# 올리브영 주요 대분류 카테고리 ID 목록
-# 10000010001: 스킨케어, 10000010009: 마스크팩, 10000010010: 클렌징, 10000010011: 선케어
-# 10000010002: 메이크업/네일, 10000010003: 바디케어, 10000010004: 헤어케어, 10000010005: 향수/디퓨저
-# 10000010008: 미용소품, 10000020001: 건강식품, 10000020002: 푸드, 10000030005: 구강/위생
 MAIN_CATEGORIES = [
     ('전체', ''),
     ('스킨케어', '10000010001'),
@@ -46,19 +78,16 @@ session = requests.Session()
 session.headers.update(HEADERS)
 
 def parse_items_from_html(html_text):
-    """HTML 텍스트에서 .prd_info 요소들을 파싱하여 상품 정보 목록을 반환합니다."""
     soup = BeautifulSoup(html_text, 'html.parser')
     items = []
     
     for prd in soup.select('.prd_info'):
         try:
-            # 상품명 추출
             name_el = prd.select_one('.prd_name .tx_name') or prd.select_one('.tx_name')
             if not name_el:
                 continue
             name = name_el.text.strip()
             
-            # 가격 추출 (.tx_cur .tx_num)
             price_el = prd.select_one('.prd_price .tx_cur .tx_num') or prd.select_one('.tx_cur .tx_num')
             if not price_el:
                 continue
@@ -67,7 +96,6 @@ def parse_items_from_html(html_text):
                 continue
             price = int(price_raw)
             
-            # goodsNo 추출
             goods_no = None
             thumb_a = prd.select_one('a.prd_thumb') or prd.select_one('a')
             if thumb_a:
@@ -89,13 +117,12 @@ def parse_items_from_html(html_text):
                     'price': price,
                     'url': f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
                 })
-        except Exception as e:
+        except Exception:
             continue
             
     return items
 
 def fetch_category_ranking(cat_name, cat_id):
-    """특정 카테고리의 랭킹 페이지를 조회합니다."""
     if cat_id:
         url = f"https://www.oliveyoung.co.kr/store/main/getBestList.do?dispCatNo={cat_id}&fltDispCatNo=&pageIdx=1&rowsPerPage=100"
     else:
@@ -108,11 +135,10 @@ def fetch_category_ranking(cat_name, cat_id):
         print(f"[{cat_name}] {len(items)}개 상품 수집 완료")
         return items
     except Exception as e:
-        print(f"[{cat_name}] 수집 중 오류: {e}")
+        print(f"[{cat_name}] 수집 중 오류 (건너뜀): {e}")
         return []
 
 def fetch_single_product_detail(goods_no, existing_url=None):
-    """사용자가 직접 등록한 단일 상품의 최신 가격을 조회합니다."""
     url = existing_url or f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
     try:
         res = session.get(url, timeout=15)
@@ -142,11 +168,11 @@ def main():
         items = fetch_category_ranking(cat_name, cat_id)
         for item in items:
             all_products[item['goods_no']] = item
-        time.sleep(1) # 요청 간 1초 딜레이
+        time.sleep(1)
         
-    # 2. 사용자가 직접 등록한 제품 (is_custom=True) 수집
+    # 2. 사용자가 직접 등록한 제품 수집
     try:
-        print("사용자 직접 등록 상품 조회 중...")
+        print("사용자 직접 등록 상품 목록 조회 중...")
         res = supabase.table('products').select('*').eq('is_custom', True).execute()
         custom_list = res.data or []
         print(f"사용자 등록 상품 수: {len(custom_list)}")
@@ -154,14 +180,13 @@ def main():
         for cp in custom_list:
             g_no = cp['goods_no']
             if g_no not in all_products:
-                print(f"사용자 등록 상품 [{g_no}] 개별 수집 시도...")
+                print(f"사용자 등록 상품 [{g_no}] 개별 가격 수집 중...")
                 item = fetch_single_product_detail(g_no, cp.get('url'))
                 if item:
                     item['is_custom'] = True
                     all_products[g_no] = item
                 time.sleep(1)
             else:
-                # 이미 랭킹에 있는 경우 is_custom 유지
                 all_products[g_no]['is_custom'] = True
     except Exception as e:
         print(f"사용자 등록 상품 처리 오류: {e}")
@@ -172,15 +197,22 @@ def main():
     success_count = 0
     for goods_no, item in all_products.items():
         try:
-            # products 테이블 업데이트
-            supabase.table('products').upsert({
-                'goods_no': item['goods_no'],
-                'name': item['name'],
-                'url': item['url'],
-                'is_custom': item.get('is_custom', False)
-            }, on_conflict='goods_no').execute()
+            # 제품 존재 여부 확인 후 삽입 또는 갱신
+            check_res = supabase.table('products').select('id').eq('goods_no', item['goods_no']).execute()
+            if check_res.data and len(check_res.data) > 0:
+                supabase.table('products').update({
+                    'name': item['name'],
+                    'url': item['url']
+                }).eq('goods_no', item['goods_no']).execute()
+            else:
+                supabase.table('products').insert({
+                    'goods_no': item['goods_no'],
+                    'name': item['name'],
+                    'url': item['url'],
+                    'is_custom': item.get('is_custom', False)
+                }).execute()
             
-            # prices 테이블에 오늘의 가격 추가
+            # 가격 테이블에 오늘 가격 삽입
             supabase.table('prices').insert({
                 'goods_no': item['goods_no'],
                 'price': item['price'],
@@ -188,11 +220,15 @@ def main():
             }).execute()
             
             success_count += 1
-        except Exception as e:
-            # 중복 날짜 가격 등은 조용히 패스
+        except Exception:
             continue
             
-    print(f"=== 완료! {success_count}개 상품 가격 저장 완료 ===")
+    print(f"=== 완료! {success_count}개 상품 가격 데이터 저장 완료 ===")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as err:
+        print(f"\n[FATAL ERROR] 실행 중 예외 발생:")
+        traceback.print_exc()
+        sys.exit(1)
