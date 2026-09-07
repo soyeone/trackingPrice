@@ -49,13 +49,32 @@
 
                     <div class="form-row">
                         <div class="form-group flex-1">
+                            <label for="product-category">카테고리 (자동 분류)</label>
+                            <select id="product-category" name="product-category" class="form-control" style="width:100%; padding:0.65rem 0.85rem; border:1px solid #e2e8f0; border-radius:8px; background:#fff; font-size:0.95rem; font-family:inherit;">
+                                <option value="스킨케어">🧴 스킨케어</option>
+                                <option value="마스크팩">🧖 마스크팩</option>
+                                <option value="클렌징">🫧 클렌징</option>
+                                <option value="선케어">☀️ 선케어</option>
+                                <option value="메이크업">💄 메이크업</option>
+                                <option value="더모 코스메틱">🧪 더모 코스메틱</option>
+                                <option value="헤어케어">💇 헤어케어</option>
+                                <option value="바디케어">🛁 바디케어</option>
+                                <option value="향수/디퓨저">💐 향수/디퓨저</option>
+                                <option value="건강식품">💊 건강식품</option>
+                                <option value="구강용품">🪥 구강용품</option>
+                                <option value="맨즈에딧">🧔 맨즈에딧</option>
+                                <option value="기타">📦 기타</option>
+                            </select>
+                        </div>
+                        <div class="form-group flex-1">
                             <label for="product-price">현재 가격 (원) <span class="required">*</span></label>
                             <input type="number" id="product-price" name="product-price" placeholder="예: 27900" required>
                         </div>
-                        <div class="form-group flex-1" id="preview-unit-price-box" style="display:none;">
-                            <label>계산된 단위 가격</label>
-                            <div class="preview-unit-price-val" id="preview-unit-price-val">-</div>
-                        </div>
+                    </div>
+
+                    <div class="form-group" id="preview-unit-price-box" style="display:none; margin-top:0.25rem;">
+                        <label>계산된 단위 가격</label>
+                        <div class="preview-unit-price-val" id="preview-unit-price-val">-</div>
                     </div>
                 </div>
 

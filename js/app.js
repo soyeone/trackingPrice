@@ -1157,6 +1157,7 @@ function setupRegisterPage(registerForm) {
     const fetchBtn = document.getElementById('btn-fetch-info');
     const previewSection = document.getElementById('product-preview-section');
     const nameInput = document.getElementById('product-name');
+    const categorySelect = document.getElementById('product-category');
     const priceInput = document.getElementById('product-price');
     const unitPriceBox = document.getElementById('preview-unit-price-box');
     const unitPriceVal = document.getElementById('preview-unit-price-val');
@@ -1198,7 +1199,7 @@ function setupRegisterPage(registerForm) {
         if (previewSection) previewSection.style.display = 'block';
         if (messageEl) {
             messageEl.style.display = 'block';
-            messageEl.innerHTML = '<span style="color:#3182f6;">⏳ 올리브영 실시간 제품명 및 가격 조회 중...</span>';
+            messageEl.innerHTML = '<span style="color:#3182f6;">⏳ 올리브영 실시간 제품명, 카테고리 및 가격 조회 중...</span>';
         }
 
         try {
@@ -1211,9 +1212,13 @@ function setupRegisterPage(registerForm) {
                 if (data.success && (data.name || data.price)) {
                     if (data.name && nameInput) nameInput.value = data.name;
                     if (data.price && priceInput) priceInput.value = data.price;
+                    if (data.category && categorySelect) {
+                        categorySelect.value = data.category;
+                    }
                     updatePreviewUnitPrice();
                     if (messageEl) {
-                        messageEl.innerHTML = '<span style="color:#16a34a; font-weight:700;">✅ 올리브영 실시간 정보를 성공적으로 불러왔습니다!</span>';
+                        const catBadge = data.category ? ` (카테고리: ${data.category})` : '';
+                        messageEl.innerHTML = `<span style="color:#16a34a; font-weight:700;">✅ 올리브영 실시간 정보${catBadge}를 성공적으로 불러왔습니다!</span>`;
                     }
                     return true;
                 }
@@ -1223,7 +1228,7 @@ function setupRegisterPage(registerForm) {
         }
 
         if (messageEl) {
-            messageEl.innerHTML = '<span style="color:#64748b;">💡 제품명과 현재 가격을 확인 후 아래 버튼을 누르면 오늘부터 즉시 추적이 시작됩니다.</span>';
+            messageEl.innerHTML = '<span style="color:#64748b;">💡 제품명, 카테고리와 현재 가격을 확인 후 아래 버튼을 누르면 오늘부터 즉시 추적이 시작됩니다.</span>';
         }
         if (nameInput && !nameInput.value) {
             nameInput.placeholder = `올리브영 상품 (${goodsNo})`;
@@ -1260,7 +1265,7 @@ function setupRegisterPage(registerForm) {
     // 등록 폼 제출 시
     registerForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const urlValue = urlInput ? urlInput.value.trim() : '';
+        let urlValue = urlInput ? urlInput.value.trim() : '';
         const goodsNo = getGoodsNoFromUrl(urlValue);
 
         if (!goodsNo) {
@@ -1282,6 +1287,7 @@ function setupRegisterPage(registerForm) {
 
         let name = nameInput && nameInput.value.trim() ? nameInput.value.trim() : `올리브영 상품 (${goodsNo})`;
         let price = priceInput && priceInput.value ? parseInt(priceInput.value, 10) : null;
+        let selectedCat = categorySelect ? categorySelect.value : '기타';
 
         try {
             // 만약 아직 가격/이름 조회가 안 된 상태에서 등록을 눌렀다면 한 번 더 API 조회 시도
@@ -1292,8 +1298,19 @@ function setupRegisterPage(registerForm) {
                         const apiData = await apiRes.json();
                         if (apiData.name) name = apiData.name;
                         if (apiData.price) price = apiData.price;
+                        if (apiData.category && categorySelect) {
+                            categorySelect.value = apiData.category;
+                            selectedCat = apiData.category;
+                        }
                     }
                 } catch (e) {}
+            }
+
+            // URL에 카테고리 정보가 없으면 선택된 카테고리 파라미터 결합
+            if (selectedCat && !urlValue.includes('catName=') && !urlValue.includes('category=')) {
+                const matchedCat = CATEGORY_LIST.find(c => c.name === selectedCat);
+                const catParam = `&catName=${encodeURIComponent(selectedCat)}${matchedCat ? `&dispCatNo=${matchedCat.id}` : ''}`;
+                urlValue += (urlValue.includes('?') ? catParam : `?goodsNo=${goodsNo}${catParam}`);
             }
 
             // 1. products 테이블에 상품 등록 / 업데이트 (upsert)

@@ -17,12 +17,70 @@ function extractGoodsNo(input) {
   return null;
 }
 
+const CATEGORY_LIST = [
+  { id: '10000010001', name: '스킨케어' },
+  { id: '10000010009', name: '마스크팩' },
+  { id: '10000010010', name: '클렌징' },
+  { id: '10000010011', name: '선케어' },
+  { id: '10000010002', name: '메이크업' },
+  { id: '10000010008', name: '더모 코스메틱' },
+  { id: '10000010004', name: '헤어케어' },
+  { id: '10000010003', name: '바디케어' },
+  { id: '10000010005', name: '향수/디퓨저' },
+  { id: '10000020001', name: '건강식품' },
+  { id: '10000020003', name: '구강용품' },
+  { id: '10000010007', name: '맨즈에딧' }
+];
+
+function extractCategoryFromHtml(html) {
+  if (!html) return null;
+
+  // 1. Breadcrumb 영역 우선 추출
+  const breadcrumbBlock = html.match(/Breadcrumb_breadcrumb-inner[\s\S]*?<\/div>/i);
+  if (breadcrumbBlock) {
+    const links = breadcrumbBlock[0].match(/role="link">([^<]+)<\/a>/g) || [];
+    for (const link of links) {
+      const nameMatch = link.match(/role="link">([^<]+)<\/a>/);
+      if (nameMatch) {
+        const catName = nameMatch[1].trim();
+        const found = CATEGORY_LIST.find(c => c.name === catName);
+        if (found) return found.name;
+        for (const c of CATEGORY_LIST) {
+          if (catName.includes(c.name) || c.name.includes(catName)) return c.name;
+        }
+      }
+    }
+  }
+
+  // 2. 전체 link 요소에서 매칭
+  const allLinks = html.match(/role="link">([^<]+)<\/a>/g) || [];
+  for (const link of allLinks) {
+    const nameMatch = link.match(/role="link">([^<]+)<\/a>/);
+    if (nameMatch) {
+      const catName = nameMatch[1].trim();
+      const found = CATEGORY_LIST.find(c => c.name === catName);
+      if (found) return found.name;
+    }
+  }
+
+  // 3. JSON 내부 카테고리명 매칭
+  const jsonMatch = html.match(/"middleCategoryName"\s*:\s*"([^"]+)"/) || html.match(/"upperCategoryName"\s*:\s*"([^"]+)"/);
+  if (jsonMatch) {
+    const catName = jsonMatch[1].trim();
+    for (const c of CATEGORY_LIST) {
+      if (catName.includes(c.name) || c.name.includes(catName)) return c.name;
+    }
+  }
+
+  return null;
+}
+
 function scrapeOliveYoungDetail(goodsNo) {
   return new Promise((resolve) => {
     const url = `https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo=${goodsNo}`;
     const args = [
       '-s', '-L', '--compressed',
-      '-A', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      '-A', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
       '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       '-H', 'Accept-Language: ko-KR,ko;q=0.9',
       url
@@ -44,7 +102,9 @@ function scrapeOliveYoungDetail(goodsNo) {
 
         let name = gnMatch ? gnMatch[1] : null;
         let price = fpMatch ? parseInt(fpMatch[1], 10) : null;
-        resolve({ name, price });
+        let category = extractCategoryFromHtml(text);
+
+        resolve({ name, price, category });
       });
       child.on('error', (e) => {
         console.error('[scrapeOliveYoungDetail] spawn error:', e);
@@ -68,6 +128,7 @@ async function trackSingleProduct(input, manualPrice, manualName) {
 
   let name = manualName;
   let price = manualPrice ? parseInt(manualPrice, 10) : null;
+  let category = null;
 
   if (!name || !price) {
     console.log('올리브영에서 실시간 제품 정보 및 가격 조회 중...');
@@ -75,13 +136,22 @@ async function trackSingleProduct(input, manualPrice, manualName) {
     if (scraped) {
       if (!name) name = scraped.name;
       if (!price) price = scraped.price;
+      if (scraped.category) category = scraped.category;
     }
   }
 
   name = name || `올리브영 상품 (${goodsNo})`;
-  const productUrl = input.startsWith('http') ? input : `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}`;
+  let productUrl = input.startsWith('http') ? input : `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}`;
+
+  // URL에 카테고리 정보가 없다면 스크래핑된 카테고리 추가
+  if (category && !productUrl.includes('catName=') && !productUrl.includes('category=')) {
+    const catObj = CATEGORY_LIST.find(c => c.name === category);
+    const catParam = `&catName=${encodeURIComponent(category)}${catObj ? `&dispCatNo=${catObj.id}` : ''}`;
+    productUrl += (productUrl.includes('?') ? catParam : `?goodsNo=${goodsNo}${catParam}`);
+  }
 
   console.log(` -> 제품명: ${name}`);
+  console.log(` -> 카테고리: ${category || '기타'}`);
   console.log(` -> 현재가: ${price ? price.toLocaleString() + '원' : '가격 미확인'}`);
 
   const headers = {

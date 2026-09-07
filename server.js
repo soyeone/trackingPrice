@@ -64,12 +64,14 @@ const server = http.createServer(async (req, res) => {
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      const catParam = scraped.category ? `&catName=${encodeURIComponent(scraped.category)}` : '';
       res.end(JSON.stringify({
         success: true,
         goodsNo,
         name: scraped.name,
         price: scraped.price,
-        url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}`
+        category: scraped.category || null,
+        url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}${catParam}`
       }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });

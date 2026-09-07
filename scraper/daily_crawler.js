@@ -163,7 +163,50 @@ function parseProductsFromHtml(html, cat) {
   return items;
 }
 
-// 2. 단일 상품 모바일 상세 페이지에서 가격 조회
+function extractCategoryFromHtml(html) {
+  if (!html) return null;
+
+  // 1. Breadcrumb 영역 우선 추출
+  const breadcrumbBlock = html.match(/Breadcrumb_breadcrumb-inner[\s\S]*?<\/div>/i);
+  if (breadcrumbBlock) {
+    const links = breadcrumbBlock[0].match(/role="link">([^<]+)<\/a>/g) || [];
+    for (const link of links) {
+      const nameMatch = link.match(/role="link">([^<]+)<\/a>/);
+      if (nameMatch) {
+        const catName = nameMatch[1].trim();
+        const found = CATEGORIES.find(c => c.catName === catName);
+        if (found) return found.catName;
+        for (const c of CATEGORIES) {
+          if (catName.includes(c.catName) || c.catName.includes(catName)) return c.catName;
+        }
+      }
+    }
+  }
+
+  // 2. 전체 link 요소에서 매칭
+  const allLinks = html.match(/role="link">([^<]+)<\/a>/g) || [];
+  for (const link of allLinks) {
+    const nameMatch = link.match(/role="link">([^<]+)<\/a>/);
+    if (nameMatch) {
+      const catName = nameMatch[1].trim();
+      const found = CATEGORIES.find(c => c.catName === catName);
+      if (found) return found.catName;
+    }
+  }
+
+  // 3. JSON 내부 카테고리명 매칭
+  const jsonMatch = html.match(/"middleCategoryName"\s*:\s*"([^"]+)"/) || html.match(/"upperCategoryName"\s*:\s*"([^"]+)"/);
+  if (jsonMatch) {
+    const catName = jsonMatch[1].trim();
+    for (const c of CATEGORIES) {
+      if (catName.includes(c.catName) || c.catName.includes(catName)) return c.catName;
+    }
+  }
+
+  return null;
+}
+
+// 2. 단일 상품 모바일 상세 페이지에서 가격 및 카테고리 조회
 function fetchSingleProductDetail(goodsNo) {
   return new Promise((resolve) => {
     const url = `https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo=${goodsNo}`;
@@ -188,7 +231,9 @@ function fetchSingleProductDetail(goodsNo) {
 
         let name = gnMatch ? gnMatch[1] : null;
         let price = fpMatch ? parseInt(fpMatch[1], 10) : null;
-        resolve({ name, price });
+        let category = extractCategoryFromHtml(text);
+
+        resolve({ name, price, category });
       });
       child.on('error', () => resolve(null));
     } catch (e) {
@@ -322,10 +367,21 @@ async function main() {
     log(`  -> 오늘 랭킹 밖 지속 추적 대상: ${outOfRankProducts.length}개 상품`);
 
     let outCount = 0;
+    let autoCatCount = 0;
     for (const p of outOfRankProducts) {
       const scraped = await fetchSingleProductDetail(p.goods_no);
       if (scraped && scraped.price) {
-        const cleanUrl = (p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`).replace(/&rank=[0-9]+/, '');
+        let cleanUrl = (p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`).replace(/&rank=[0-9]+/, '');
+
+        // 기존 URL에 카테고리 정보가 없고 스크래핑된 카테고리가 있다면 자동 보강!
+        const hasCategory = cleanUrl.includes('catName=') || cleanUrl.includes('category=');
+        if (!hasCategory && scraped.category) {
+          const matchedCat = CATEGORIES.find(c => c.catName === scraped.category);
+          const catParam = `&catName=${encodeURIComponent(scraped.category)}${matchedCat ? `&dispCatNo=${matchedCat.catNo}` : ''}`;
+          cleanUrl += (cleanUrl.includes('?') ? catParam : `?goodsNo=${p.goods_no}${catParam}`);
+          autoCatCount++;
+        }
+
         collectedMap.set(p.goods_no, {
           goods_no: p.goods_no,
           name: p.name || scraped.name,
@@ -337,7 +393,7 @@ async function main() {
       }
       await new Promise(r => setTimeout(r, 300));
     }
-    log(`  -> 랭킹 밖 상품 중 ${outCount}개 가격 최신 갱신 완료`);
+    log(`  -> 랭킹 밖 상품 중 ${outCount}개 가격 갱신 완료 (카테고리 신규 자동 보강: ${autoCatCount}개)`);
   } catch (err) {
     log(`  ⚠️ DB 기존 상품 추적 중 오류: ${err.message}`);
   }
