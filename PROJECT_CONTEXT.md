@@ -137,32 +137,37 @@ trackingPrice/
 
 ## 6. 올리브영 스크래핑 핵심 노하우 & 기술적 제약 (Gotchas)
 
-1. **데스크톱 vs 모바일 상세 페이지**:
-   - 올리브영 PC 페이지(`www.oliveyoung.co.kr`)는 넷퍼넬(NetFUNNEL) 대기열 및 Akamai WAF가 적용되어 자동화 요청 시 차단될 위험이 높습니다.
-   - 반면 **모바일 상세 페이지**(`https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo=...`)는 대기열이 없으며, HTML 내부에 Next.js Hydration 데이터(`\"goodsName\"`, `\"finalPrice\"`, `\"salePrice\"`)가 JSON 문자열 형태로 안전하게 포함되어 있어 가장 빠르고 안정적으로 파싱할 수 있습니다.
-2. **TLS 지문 (JA3 Fingerprint) 및 Node.js Fetch 이슈**:
+1. **해외 데이터센터 IP 차단 (Geoblocking & WAF)**:
+   - 올리브영 국내 사이트는 Cloudflare/Akamai 방화벽으로 **해외 IP 및 클라우드 호스팅/데이터센터(Azure/GitHub Actions, AWS 등) IP 대역을 100% 403 Forbidden으로 원천 차단**합니다.
+   - 따라서 GitHub Actions 무료 러너에서 실행 시 모든 요청이 403으로 막히며, 반드시 **국내 로컬 IP 환경(`scraper/daily_crawler.js`)**에서 실행해야 합니다.
+2. **PC 랭킹 수집 시 세션 쿠키 필수 (`initSessionCookies`)**:
+   - 올리브영 PC 페이지(`getBestList.do`)는 쿠키 없이 직접 호출 시 Cloudflare 봇 챌린지(`cf-mitigated: challenge`, 잠시만 기다려 주세요)가 발생합니다.
+   - 메인 페이지(`https://www.oliveyoung.co.kr/`)를 먼저 거쳐 세션 쿠키(`cookie jar`)를 획득한 후 `getBestList.do`를 호출하면 Cloudflare 챌린지를 완벽하게 통과하여 100개 상품을 정상 수집할 수 있습니다.
+3. **데스크톱 vs 모바일 상세 페이지**:
+   - 올리브영 PC 상세 페이지는 넷퍼넬 대기열이 걸릴 수 있습니다.
+   - 반면 **모바일 상세 페이지**(`https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo=...`)는 대기열이 없으며, Next.js Hydration 데이터(`\"goodsName\"`, `\"finalPrice\"`, `\"salePrice\"`)가 JSON 문자열 형태로 안전하게 포함되어 있어 랭킹 밖 상품 가격 갱신에 최적입니다.
+4. **TLS 지문 (JA3 Fingerprint) 및 Node.js Fetch 이슈**:
    - Node.js 22 내장 `fetch()`로 올리브영 모바일 페이지를 직접 호출하면 Akamai/Cloudflare 봇 감지에 걸려 `403 Forbidden`이 반환됩니다.
-   - 그러나 **`curl.exe` (Git mingw64 포함 버전)** 또는 **Python `requests`** 라이브러리를 사용하면 봇 감지를 우회하여 정상(`200 OK`)으로 응답받을 수 있습니다.
-   - 따라서 로컬 Node 환경에서는 `child_process.spawn('curl.exe', ...)` 방식으로 실시간 스크래핑을 수행합니다.
-3. **브라우저 CORS 제한**:
-   - 순수 클라이언트 브라우저(`register.html`)에서 올리브영으로의 직접 AJAX/fetch는 동일 출처 정책(CORS)으로 차단됩니다.
-   - 또한 공용 무료 프록시(allorigins 등)는 올리브영에서 해외 IP로 판단하여 403을 반환합니다.
-   - 따라서 **`npm start`로 구동되는 로컬 프록시 API(`/api/scrape`)**를 경유하거나 터미널 스크립트를 사용하도록 설계되었습니다.
-4. **Supabase 1,000건 기본 상한 극복**:
-   - PostgREST 기본 설정상 단일 쿼리 시 최대 1,000건만 반환됩니다.
-   - 현재 등록된 상품 및 가격 데이터가 1,000건을 넘으므로, `app.js`의 `fetchAllProducts()`, `fetchAllPrices()` 및 Python `main.py`에서는 `.range(from, from + 999)`를 이용한 **배치 페이징 루프**를 통해 누락 없이 전건을 로드합니다.
+   - 반면 **`curl.exe` (Git mingw64 포함 버전)**는 봇 감지를 통과하므로 `child_process.spawn('curl.exe', ...)` 방식으로 실시간 스크래핑을 수행합니다.
+5. **브라우저 CORS 제한**:
+   - 브라우저(`register.html`)에서 올리브영 직접 호출은 CORS로 차단되므로, `npm start` 로컬 프록시 API(`/api/scrape`)를 경유합니다.
+6. **Supabase 1,000건 기본 상한 극복**:
+   - PostgREST 기본 1,000건 제한을 피하기 위해 `.range(from, from + 999)` 페이징 루프로 전건(1,200+건)을 로드/저장합니다.
+7. **PC 부팅 시 당일 중복 수집 방지 (Idempotency)**:
+   - 사용자 PC가 하루에 여러 번 켜질 수 있으므로, `scraper/last_run.json`에 오늘 날짜(`YYYY-MM-DD`) 성공 기록이 남아 있으면 스크래퍼가 0.1초 만에 자동으로 조용히 종료됩니다. (강제 재수집은 `--force` 플래그 사용)
 
 ---
 
 ## 7. 주요 실행 명령어 (Command Cheat Sheet)
 
-| 용도 | 명령어 | 설명 |
+| 용도 | 명령어 / 파일 | 설명 |
 | :--- | :--- | :--- |
-| **로컬 웹 서버 구동** | `npm start` (또는 `node server.js`) | http://localhost:3000 에서 대시보드 및 실시간 스크래핑 등록 실행 |
+| **부팅 시 자동 실행 등록 (원클릭)** | `setup_autostart.bat` | Windows 시작프로그램에 무간섭 백그라운드 스크래퍼 등록 (더블클릭) |
+| **부팅 시 자동 실행 해제** | `remove_autostart.bat` | Windows 시작프로그램에서 자동 실행 제거 (더블클릭) |
+| **일일 스크래퍼 수동 실행 (Node)** | `npm run crawl` (또는 `run_daily_scraper.bat`) | 당일 미수집 시 전체 랭킹 및 가격 수집 (중복 시 건너뜀) |
+| **일일 스크래퍼 강제 재실행** | `npm run crawl:force` | 오늘 이미 수집했더라도 강제로 다시 전건 수집 |
+| **로컬 웹 서버 구동** | `npm start` (또는 `node server.js`) | http://localhost:3000 대시보드 및 실시간 스크래핑 등록 서버 구동 |
 | **단일 상품 즉시 트래킹 (Node)** | `npm run track <올리브영URL 또는 goodsNo>` | 터미널에서 즉시 올리브영 파싱 후 Supabase 등록 및 당일 가격 기록 |
-| **단일 상품 즉시 트래킹 (Python)** | `python scraper/main.py <URL 또는 goodsNo>` | Python으로 단일 상품 즉시 등록 |
-| **전체 랭킹 배치 수집 (Python)** | `python scraper/main.py` | 12개 카테고리 TOP 100 + 기존 등록 상품 전건 수집 (GitHub Actions와 동일) |
-| **전체 랭킹 시드 수집 (Node)** | `node scraper/seed_ranking.js` | 12개 카테고리 랭킹 TOP 100을 Node로 수집 |
 
 ---
 

@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "track": "node scraper/track_product.js"
+    "track": "node scraper/track_product.js",
+    "crawl": "node scraper/daily_crawler.js",
+    "crawl:force": "node scraper/daily_crawler.js --force"
   },
   "keywords": ["oliveyoung", "price-tracker"],
   "author": "soyeone",

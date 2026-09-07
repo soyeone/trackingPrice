@@ -1,9 +1,13 @@
 name: Daily Price Scraper
 
+# [안내] 올리브영의 해외 데이터센터 IP(Azure/GitHub Actions) 403 차단 정책으로 인해
+# 일일 자동 스케줄러는 로컬 PC 자동화(setup_autostart.bat)로 이관되었습니다.
+# 본 워크플로우는 원격 디버깅 또는 수동 테스트용으로만 보존됩니다.
 on:
-  schedule:
-    - cron: '0 0 * * *'  # 매일 오전 9시 KST (UTC 00:00)
+  # schedule:
+  #   - cron: '0 0 * * *'  # 해외 IP 차단으로 로컬 스케줄러로 대체됨
   workflow_dispatch:      # 수동 실행 트리거
+
 
 jobs:
   scrape-prices:
