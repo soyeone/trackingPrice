@@ -184,7 +184,7 @@ async function initDashboard() {
             const finalRank = is_discontinued ? null : rank;
             const finalCatRanks = is_discontinued ? {} : catRanks;
 
-            let displayName = prod.name || `올리브영 상품 (${prod.goods_no})`;
+            let displayName = (prod.name && prod.name !== prod.goods_no) ? prod.name : `올리브영 상품 (${prod.goods_no})`;
             if (is_discontinued && !displayName.includes('[판매종료]')) {
                 displayName = `[판매종료] ${displayName}`;
             }
@@ -1448,7 +1448,8 @@ function setupRegisterPage(registerForm) {
             messageEl.innerHTML = '<span style="color:#3182f6;">데이터베이스에 상품 및 당일 가격 기록을 등록하는 중입니다...</span>';
         }
 
-        let name = nameInput && nameInput.value.trim() ? nameInput.value.trim() : `올리브영 상품 (${goodsNo})`;
+        let rawNameVal = nameInput && nameInput.value.trim() ? nameInput.value.trim() : '';
+        let name = (rawNameVal && rawNameVal !== goodsNo) ? rawNameVal : `올리브영 상품 (${goodsNo})`;
         let price = priceInput && priceInput.value ? parseInt(priceInput.value, 10) : null;
         let selectedCat = categorySelect ? categorySelect.value : '기타';
 

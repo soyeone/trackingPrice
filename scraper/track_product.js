@@ -204,7 +204,8 @@ async function trackSingleProduct(input, manualPrice, manualName) {
   let category = null;
   let isDiscontinued = false;
 
-  if (!name || !price) {
+  const isPlaceholderName = !name || name === goodsNo || name.startsWith('올리브영 상품');
+  if (isPlaceholderName || !price) {
     console.log('올리브영에서 실시간 제품 정보 및 가격 조회 중...');
     const scraped = await scrapeOliveYoungDetail(goodsNo);
     if (scraped) {
@@ -212,7 +213,7 @@ async function trackSingleProduct(input, manualPrice, manualName) {
         isDiscontinued = true;
         console.log('  ⚠️ 올리브영에서 판매종료 또는 존재하지 않는 상품으로 감지되었습니다.');
       }
-      if (!name) name = scraped.name;
+      if (scraped.name && (isPlaceholderName || !name)) name = scraped.name;
       if (!price) price = scraped.price;
       if (scraped.category) category = scraped.category;
     }

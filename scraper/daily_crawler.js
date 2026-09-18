@@ -640,7 +640,8 @@ async function main() {
           discUrl += (discUrl.includes('?') ? '&status=discontinued' : '?status=discontinued');
         }
 
-        const rawName = scraped.name || p.name || `올리브영 상품 (${p.goods_no})`;
+        const validScrapedName = scraped.name && scraped.name !== '올리브영 온라인몰' && scraped.name !== '올리브영';
+        const rawName = validScrapedName ? scraped.name : (p.name && p.name !== p.goods_no ? p.name : `올리브영 상품 (${p.goods_no})`);
         const cleanName = rawName.replace(/^\[판매종료\]\s*/, '').trim();
         const updatedName = `[판매종료] ${cleanName}`;
 
@@ -655,54 +656,73 @@ async function main() {
         }
       }
 
-      if (scraped && scraped.price) {
-        let cleanUrl = (p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`)
-          .replace(/([?&])rank=[0-9]+&?/g, '$1')
-          .replace(/([?&])catRanks=[^&]*&?/g, '$1')
-          .replace(/[?&]$/, '');
+      let cleanUrl = (p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`)
+        .replace(/([?&])rank=[0-9]+&?/g, '$1')
+        .replace(/([?&])catRanks=[^&]*&?/g, '$1')
+        .replace(/[?&]$/, '');
 
-        // 1. 기존 URL에서 현재 등록된 카테고리 정보 확인
-        let existingCat = null;
-        try {
-          const u = new URL(cleanUrl);
-          const cp = u.searchParams.get('catName') || u.searchParams.get('category');
-          if (cp) existingCat = decodeURIComponent(cp);
-        } catch (e) {
-          const m = cleanUrl.match(/[?&](?:catName|category)=([^&]+)/);
-          if (m) existingCat = decodeURIComponent(m[1]);
-        }
+      // 1. 기존 URL에서 현재 등록된 카테고리 정보 확인
+      let existingCat = null;
+      try {
+        const u = new URL(cleanUrl);
+        const cp = u.searchParams.get('catName') || u.searchParams.get('category');
+        if (cp) existingCat = decodeURIComponent(cp);
+      } catch (e) {
+        const m = cleanUrl.match(/[?&](?:catName|category)=([^&]+)/);
+        if (m) existingCat = decodeURIComponent(m[1]);
+      }
 
-        // 2. 올리브영 상세 페이지에서 파싱된 실제 공식 카테고리가 있다면 자동 보정/보강
-        if (scraped.category) {
-          const matchedCat = CATEGORIES.find(c => c.catName === scraped.category);
-          if (!existingCat || existingCat !== scraped.category) {
-            try {
-              const u = new URL(cleanUrl);
-              u.searchParams.set('catName', scraped.category);
-              if (matchedCat) {
-                u.searchParams.set('dispCatNo', matchedCat.catNo);
-              }
-              cleanUrl = u.toString();
-            } catch (e) {
-              cleanUrl = cleanUrl.replace(/([?&])(?:catName|dispCatNo)=[^&]*/g, '');
-              const catParam = `&catName=${encodeURIComponent(scraped.category)}${matchedCat ? `&dispCatNo=${matchedCat.catNo}` : ''}`;
-              cleanUrl += (cleanUrl.includes('?') ? catParam : `?goodsNo=${p.goods_no}${catParam}`);
+      // 2. 올리브영 상세 페이지에서 파싱된 실제 공식 카테고리가 있다면 자동 보정/보강
+      if (scraped && scraped.category) {
+        const matchedCat = CATEGORIES.find(c => c.catName === scraped.category);
+        if (!existingCat || existingCat !== scraped.category) {
+          try {
+            const u = new URL(cleanUrl);
+            u.searchParams.set('catName', scraped.category);
+            if (matchedCat) {
+              u.searchParams.set('dispCatNo', matchedCat.catNo);
             }
-            autoCatCount++;
-            if (existingCat && existingCat !== scraped.category) {
-              log(`    🔄 [카테고리 자동 보정] ${p.name || p.goods_no}: '${existingCat}' -> '${scraped.category}'`);
-            }
+            cleanUrl = u.toString();
+          } catch (e) {
+            cleanUrl = cleanUrl.replace(/([?&])(?:catName|dispCatNo)=[^&]*/g, '');
+            const catParam = `&catName=${encodeURIComponent(scraped.category)}${matchedCat ? `&dispCatNo=${matchedCat.catNo}` : ''}`;
+            cleanUrl += (cleanUrl.includes('?') ? catParam : `?goodsNo=${p.goods_no}${catParam}`);
           }
+          autoCatCount++;
+          if (existingCat && existingCat !== scraped.category) {
+            log(`    🔄 [카테고리 자동 보정] ${p.name || p.goods_no}: '${existingCat}' -> '${scraped.category}'`);
+          }
+        }
+      }
+
+      const validScrapedName = scraped && scraped.name && scraped.name !== '올리브영 온라인몰' && scraped.name !== '올리브영';
+      const finalName = validScrapedName ? scraped.name : (p.name && p.name !== p.goods_no ? p.name : `올리브영 상품 (${p.goods_no})`);
+
+      if (scraped && scraped.price) {
+        if (p.name && finalName !== p.name) {
+          log(`    🏷️ [상품명 최신 정보 갱신] ${p.goods_no}: '${p.name}' -> '${finalName}'`);
         }
 
         collectedMap.set(p.goods_no, {
           goods_no: p.goods_no,
-          name: p.name || scraped.name,
+          name: finalName,
           price: scraped.price,
           url: cleanUrl,
           is_custom: p.is_custom || false
         });
         outCount++;
+      } else if (scraped && !scraped.isDiscontinued && !scraped.notFound && validScrapedName) {
+        if (p.name && finalName !== p.name) {
+          log(`    🏷️ [상품명 최신 정보 갱신 (가격 미확인)] ${p.goods_no}: '${p.name}' -> '${finalName}'`);
+        }
+
+        collectedMap.set(p.goods_no, {
+          goods_no: p.goods_no,
+          name: finalName,
+          price: null,
+          url: cleanUrl,
+          is_custom: p.is_custom || false
+        });
       }
 
       // 콘솔 실시간 프로그레스 바 렌더링 (진행률, 남은 시간, 상태)
