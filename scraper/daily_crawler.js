@@ -247,10 +247,9 @@ function parseProductsFromHtml(html, cat, discontinuedSet = new Set()) {
   for (const item of brokenOrDiscontinuedItems) {
     reordered.push({
       ...item,
-      rank: currentRank,
-      url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${item.goods_no}&dispCatNo=${cat.catNo}&catName=${encodeURIComponent(cat.catName)}&rank=${currentRank}&status=discontinued`
+      rank: null, // 판매종료/링크불가 상품은 랭킹 태그를 부여하지 않음 (순위 없음)
+      url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${item.goods_no}&dispCatNo=${cat.catNo}&catName=${encodeURIComponent(cat.catName)}&status=discontinued`
     });
-    currentRank++;
   }
 
   return reordered;
@@ -559,7 +558,16 @@ async function main() {
       continue;
     }
     const items = parseProductsFromHtml(html, cat, existingDiscontinuedSet);
+    const THEME_CATEGORIES = ['더모 코스메틱', '맨즈에딧'];
+
     for (const item of items) {
+      if (collectedMap.has(item.goods_no)) {
+        const existing = collectedMap.get(item.goods_no);
+        // 기존이 제형 본 카테고리(스킨케어, 클렌징 등)이고 현재가 테마 카테고리면 기존 본 카테고리 랭킹 보존
+        if (THEME_CATEGORIES.includes(cat.catName) && !THEME_CATEGORIES.includes(existing.category)) {
+          continue;
+        }
+      }
       collectedMap.set(item.goods_no, item);
     }
     log(`  ✅ [${cat.catName}] ${items.length}개 상품 수집 완료`);
@@ -614,7 +622,9 @@ async function main() {
 
       // 판매종료/미존재 상품 감지 시 DB URL에 &status=discontinued 결합 및 상품명에 [판매종료] 태그 부여
       if (scraped && (scraped.notFound || scraped.isDiscontinued)) {
-        let discUrl = p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`;
+        let discUrl = (p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`)
+          .replace(/([?&])rank=[0-9]+&?/g, '$1')
+          .replace(/[?&]$/, '');
         if (!discUrl.includes('status=discontinued')) {
           discUrl += (discUrl.includes('?') ? '&status=discontinued' : '?status=discontinued');
         }

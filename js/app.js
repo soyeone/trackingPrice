@@ -180,6 +180,9 @@ async function initDashboard() {
                 (currentPrice === null || currentPrice === undefined || currentPrice <= 0)
             );
 
+            // 판매종료/단종 상품은 과거 랭킹 잔여값 무시 및 랭킹 태그 완전 제거
+            const finalRank = is_discontinued ? null : rank;
+
             let displayName = prod.name || `올리브영 상품 (${prod.goods_no})`;
             if (is_discontinued && !displayName.includes('[판매종료]')) {
                 displayName = `[판매종료] ${displayName}`;
@@ -189,7 +192,7 @@ async function initDashboard() {
                 ...prod,
                 displayName,
                 category,
-                rank,
+                rank: finalRank,
                 is_discontinued,
                 currentPrice,
                 minPrice,
@@ -527,6 +530,11 @@ function extractProductMeta(prod) {
             if (rankParam && !isNaN(parseInt(rankParam, 10))) {
                 rank = parseInt(rankParam, 10);
             }
+
+            // 판매종료 상품인 경우 과거 rank 파라미터 무시
+            if (urlObj.searchParams.get('status') === 'discontinued' || (prod.name && prod.name.includes('[판매종료]'))) {
+                rank = null;
+            }
         } catch (e) {}
     }
 
@@ -862,10 +870,10 @@ function renderProductGrid(targetGrid, products) {
         // 배지 생성
         let rankBadgeHtml = '';
         if (prod.is_discontinued) {
+            // 판매종료 상품은 랭킹 태그를 절대 표시하지 않고 판매종료 태그만 단독 표시
             rankBadgeHtml = `<span class="badge-discontinued">⛔ [판매종료]</span>`;
-        }
-        if (prod.is_custom) {
-            rankBadgeHtml += (rankBadgeHtml ? ' ' : '') + `<span class="badge-custom">📌 직접 등록</span>`;
+        } else if (prod.is_custom) {
+            rankBadgeHtml = `<span class="badge-custom">📌 직접 등록</span>`;
         } else if (prod.rank) {
             let rBadge = '';
             if (prod.rank === 1) {
@@ -877,7 +885,7 @@ function renderProductGrid(targetGrid, products) {
             } else {
                 rBadge = `<span class="badge-rank badge-rank-normal">${prod.rank}위</span>`;
             }
-            rankBadgeHtml += (rankBadgeHtml ? ' ' : '') + rBadge;
+            rankBadgeHtml = rBadge;
         }
 
         // 카테고리 배지
@@ -995,9 +1003,12 @@ function showDetailView(goodsNo) {
 
     const customBadge = document.getElementById('detail-custom-badge');
     if (customBadge) {
-        const rankText = product.rank ? ` • ${product.rank}위` : '';
-        const discText = product.is_discontinued ? '⛔ [판매종료] • ' : '';
-        customBadge.textContent = discText + (product.is_custom ? '직접 등록 상품' : `${product.category} 랭킹${rankText}`);
+        if (product.is_discontinued) {
+            customBadge.textContent = `⛔ [판매종료] • ${product.category}`;
+        } else {
+            const rankText = product.rank ? ` • ${product.rank}위` : '';
+            customBadge.textContent = product.is_custom ? '직접 등록 상품' : `${product.category} 랭킹${rankText}`;
+        }
     }
 
     const oyLink = document.getElementById('detail-oy-link');
