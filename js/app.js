@@ -29,6 +29,7 @@ let selectedCategory = 'all';     // 'all' 또는 특정 카테고리명
 let currentViewMode = 'grouped';   // 'grouped' (카테고리별 묶어보기, 기본값) 또는 'flat' (그리드)
 let currentSortMode = 'rank';      // 'rank' (랭킹순), 'unit_asc' (가성비순), 'price_asc', 'price_desc'
 let searchKeyword = '';
+let hideDiscontinued = true;       // 판매종료 상품 목록 숨김 여부 (기본 true)
 
 /**
  * 초기화 진입점
@@ -171,11 +172,25 @@ async function initDashboard() {
             const capInfo = parseCapacity(prod.name);
             const unitPriceInfo = calculateUnitPrice(currentPrice, capInfo);
 
+            // 판매종료 또는 링크를 찾을 수 없는 제품 판별
+            const is_link_broken = !prod.url || prod.url.trim() === '' || prod.url.includes('notFound=true') || prod.url.includes('status=discontinued');
+            const is_discontinued = !!(
+                is_link_broken ||
+                (prod.name && prod.name.includes('[판매종료]')) ||
+                (currentPrice === null || currentPrice === undefined || currentPrice <= 0)
+            );
+
+            let displayName = prod.name || `올리브영 상품 (${prod.goods_no})`;
+            if (is_discontinued && !displayName.includes('[판매종료]')) {
+                displayName = `[판매종료] ${displayName}`;
+            }
+
             return {
                 ...prod,
-                displayName: prod.name || `올리브영 상품 (${prod.goods_no})`,
+                displayName,
                 category,
                 rank,
+                is_discontinued,
                 currentPrice,
                 minPrice,
                 maxPrice,
@@ -206,6 +221,17 @@ async function initDashboard() {
             sortSelect.addEventListener('change', (e) => {
                 currentSortMode = e.target.value;
                 console.log('[대시보드] 정렬 기준 변경:', currentSortMode);
+                renderView();
+            });
+        }
+
+        // 판매종료 숨기기 토글 체크박스 이벤트 바인딩
+        const toggleHideDisc = document.getElementById('toggle-hide-discontinued');
+        if (toggleHideDisc) {
+            toggleHideDisc.checked = hideDiscontinued;
+            toggleHideDisc.addEventListener('change', (e) => {
+                hideDiscontinued = e.target.checked;
+                console.log('[대시보드] 판매종료 상품 숨김 상태 변경:', hideDiscontinued);
                 renderView();
             });
         }
@@ -424,28 +450,56 @@ function calculateUnitPrice(price, capInfo) {
 
 /**
  * 정렬 기준에 따라 제품 리스트 정렬
+ * - 1순위: 정상 판매 상품 vs 판매종료/링크불가 제품 (판매종료/링크불가 제품은 무조건 목록의 맨 끝으로 정렬)
+ * - 2순위: 정상 판매 상품 내부 정렬 (랭킹순: 현재 랭킹 1~100위 우선 오름차순 -> 랭킹 밖 상품, 가성비순, 가격순)
+ * - 3순위: 맨 끝 판매종료/링크불가 제품 내부 정렬 (랭킹순 -> 상품명 가나다순)
  */
 function sortProducts(list, sortMode) {
     return [...list].sort((a, b) => {
+        const aBroken = !!(a.is_discontinued || !a.currentPrice || a.currentPrice <= 0);
+        const bBroken = !!(b.is_discontinued || !b.currentPrice || b.currentPrice <= 0);
+
+        // 1. 정상 판매 상품 vs 판매종료/링크불가 상품 분리
+        // broken 상품은 항상 뒤(+1)로 이동하여 가장 끝에 정렬됨
+        if (aBroken !== bBroken) {
+            return aBroken ? 1 : -1;
+        }
+
+        // 2. 둘 다 판매종료/링크불가 상품인 경우 (가장 끝 그룹 내부)
+        if (aBroken && bBroken) {
+            const rA = (a.rank && a.rank >= 1 && a.rank <= 100) ? a.rank : 9999;
+            const rB = (b.rank && b.rank >= 1 && b.rank <= 100) ? b.rank : 9999;
+            if (rA !== rB) return rA - rB;
+            return (a.displayName || '').localeCompare(b.displayName || '', 'ko');
+        }
+
+        // 3. 둘 다 정상 판매 상품인 경우:
         if (sortMode === 'unit_asc') {
-            // 가성비순: 단위 가격 정보가 있는 제품 우선, 단위가격 낮은 순
+            // 가성비순: 단위가격 낮은 순 -> 동률 시 랭킹순
             const uA = a.unitPriceInfo ? a.unitPriceInfo.unitPrice : 999999999;
             const uB = b.unitPriceInfo ? b.unitPriceInfo.unitPrice : 999999999;
             if (uA !== uB) return uA - uB;
             return (a.rank || 9999) - (b.rank || 9999);
         } else if (sortMode === 'price_asc') {
+            // 가격 낮은순 -> 동률 시 랭킹순
             const pA = (a.currentPrice !== null && a.currentPrice !== undefined) ? a.currentPrice : 999999999;
             const pB = (b.currentPrice !== null && b.currentPrice !== undefined) ? b.currentPrice : 999999999;
             if (pA !== pB) return pA - pB;
             return (a.rank || 9999) - (b.rank || 9999);
         } else if (sortMode === 'price_desc') {
+            // 가격 높은순 -> 동률 시 랭킹순
             const pA = (a.currentPrice !== null && a.currentPrice !== undefined) ? a.currentPrice : 0;
             const pB = (b.currentPrice !== null && b.currentPrice !== undefined) ? b.currentPrice : 0;
             if (pA !== pB) return pB - pA;
             return (a.rank || 9999) - (b.rank || 9999);
         } else {
-            // 기본 랭킹순
-            return (a.rank || 9999) - (b.rank || 9999);
+            // 기본: 현재 올리브영 랭킹순 ('rank')
+            // 현재 랭킹 1~100위 상품을 1위부터 100위까지 순서대로 배치
+            const rA = (a.rank && a.rank >= 1 && a.rank <= 100) ? a.rank : 9999;
+            const rB = (b.rank && b.rank >= 1 && b.rank <= 100) ? b.rank : 9999;
+            if (rA !== rB) return rA - rB;
+            // 둘 다 랭킹 밖 상품인 경우 상품명 순
+            return (a.displayName || '').localeCompare(b.displayName || '', 'ko');
         }
     });
 }
@@ -593,10 +647,13 @@ function renderView() {
         return;
     }
 
-    // 검색어 필터링
+    // 판매종료 필터링 및 검색어 필터링
     let filtered = allProducts;
+    if (hideDiscontinued) {
+        filtered = filtered.filter(p => !p.is_discontinued);
+    }
     if (searchKeyword) {
-        filtered = allProducts.filter(p =>
+        filtered = filtered.filter(p =>
             (p.displayName && p.displayName.toLowerCase().includes(searchKeyword)) ||
             (p.goods_no && p.goods_no.toLowerCase().includes(searchKeyword)) ||
             (p.category && p.category.toLowerCase().includes(searchKeyword))
@@ -605,7 +662,9 @@ function renderView() {
 
     if (searchStats) {
         const catLabel = selectedCategory === 'all' ? '전체 카테고리' : `'${selectedCategory}'`;
-        searchStats.textContent = `${catLabel} 총 ${filtered.length}개의 추적 제품이 있습니다.`;
+        const totalDiscCount = allProducts.filter(p => p.is_discontinued).length;
+        const discNotice = (hideDiscontinued && totalDiscCount > 0) ? ` (판매종료 ${totalDiscCount}개 숨김)` : '';
+        searchStats.textContent = `${catLabel} 총 ${filtered.length}개의 추적 제품이 있습니다.${discNotice}`;
     }
 
     if (filtered.length === 0) {
@@ -798,22 +857,27 @@ function renderProductGrid(targetGrid, products) {
 
     products.forEach(prod => {
         const card = document.createElement('div');
-        card.className = 'product-card';
+        card.className = `product-card ${prod.is_discontinued ? 'is-discontinued' : ''}`;
 
-        // 랭킹 배지 생성
+        // 배지 생성
         let rankBadgeHtml = '';
+        if (prod.is_discontinued) {
+            rankBadgeHtml = `<span class="badge-discontinued">⛔ [판매종료]</span>`;
+        }
         if (prod.is_custom) {
-            rankBadgeHtml = `<span class="badge-custom">📌 직접 등록</span>`;
+            rankBadgeHtml += (rankBadgeHtml ? ' ' : '') + `<span class="badge-custom">📌 직접 등록</span>`;
         } else if (prod.rank) {
+            let rBadge = '';
             if (prod.rank === 1) {
-                rankBadgeHtml = `<span class="badge-rank badge-rank-1">👑 1위</span>`;
+                rBadge = `<span class="badge-rank badge-rank-1">👑 1위</span>`;
             } else if (prod.rank === 2) {
-                rankBadgeHtml = `<span class="badge-rank badge-rank-2">🥈 2위</span>`;
+                rBadge = `<span class="badge-rank badge-rank-2">🥈 2위</span>`;
             } else if (prod.rank === 3) {
-                rankBadgeHtml = `<span class="badge-rank badge-rank-3">🥉 3위</span>`;
+                rBadge = `<span class="badge-rank badge-rank-3">🥉 3위</span>`;
             } else {
-                rankBadgeHtml = `<span class="badge-rank badge-rank-normal">${prod.rank}위</span>`;
+                rBadge = `<span class="badge-rank badge-rank-normal">${prod.rank}위</span>`;
             }
+            rankBadgeHtml += (rankBadgeHtml ? ' ' : '') + rBadge;
         }
 
         // 카테고리 배지
@@ -849,7 +913,9 @@ function renderProductGrid(targetGrid, products) {
                 <div class="card-price-section">
                     <div class="card-price-row">
                         <span class="card-price-label">가격 정보</span>
-                        <span style="font-size:0.85rem; color:#8b95a1;">수집 대기 중</span>
+                        <span style="font-size:0.85rem; color:${prod.is_discontinued ? '#e11d48' : '#8b95a1'}; font-weight:${prod.is_discontinued ? '700' : 'normal'};">
+                            ${prod.is_discontinued ? '판매 종료' : '수집 대기 중'}
+                        </span>
                     </div>
                 </div>
             `;
@@ -930,7 +996,8 @@ function showDetailView(goodsNo) {
     const customBadge = document.getElementById('detail-custom-badge');
     if (customBadge) {
         const rankText = product.rank ? ` • ${product.rank}위` : '';
-        customBadge.textContent = product.is_custom ? '직접 등록 상품' : `${product.category} 랭킹${rankText}`;
+        const discText = product.is_discontinued ? '⛔ [판매종료] • ' : '';
+        customBadge.textContent = discText + (product.is_custom ? '직접 등록 상품' : `${product.category} 랭킹${rankText}`);
     }
 
     const oyLink = document.getElementById('detail-oy-link');
@@ -1209,18 +1276,30 @@ function setupRegisterPage(registerForm) {
             });
             if (res.ok) {
                 const data = await res.json();
-                if (data.success && (data.name || data.price)) {
-                    if (data.name && nameInput) nameInput.value = data.name;
-                    if (data.price && priceInput) priceInput.value = data.price;
-                    if (data.category && categorySelect) {
-                        categorySelect.value = data.category;
+                if (data.success) {
+                    if (data.isDiscontinued) {
+                        if (data.name && nameInput) nameInput.value = data.name;
+                        if (data.url && urlInput) urlInput.value = data.url;
+                        if (data.category && categorySelect) categorySelect.value = data.category;
+                        updatePreviewUnitPrice();
+                        if (messageEl) {
+                            messageEl.innerHTML = `<span style="color:#e11d48; font-weight:700;">⛔ 올리브영에서 판매종료 또는 미존재 상품으로 감지되었습니다. [판매종료] 태그가 부여된 상태로 등록됩니다.</span>`;
+                        }
+                        return true;
                     }
-                    updatePreviewUnitPrice();
-                    if (messageEl) {
-                        const catBadge = data.category ? ` (카테고리: ${data.category})` : '';
-                        messageEl.innerHTML = `<span style="color:#16a34a; font-weight:700;">✅ 올리브영 실시간 정보${catBadge}를 성공적으로 불러왔습니다!</span>`;
+                    if (data.name || data.price) {
+                        if (data.name && nameInput) nameInput.value = data.name;
+                        if (data.price && priceInput) priceInput.value = data.price;
+                        if (data.category && categorySelect) {
+                            categorySelect.value = data.category;
+                        }
+                        updatePreviewUnitPrice();
+                        if (messageEl) {
+                            const catBadge = data.category ? ` (카테고리: ${data.category})` : '';
+                            messageEl.innerHTML = `<span style="color:#16a34a; font-weight:700;">✅ 올리브영 실시간 정보${catBadge}를 성공적으로 불러왔습니다!</span>`;
+                        }
+                        return true;
                     }
-                    return true;
                 }
             }
         } catch (err) {
@@ -1323,7 +1402,7 @@ function setupRegisterPage(registerForm) {
             if (prodError) throw prodError;
 
             // 2. prices 테이블에 오늘 일자 가격 즉시 저장 (당일 트래킹 즉시 시작)
-            const today = new Date().toISOString().split('T')[0];
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
             let priceRecorded = false;
 
             if (price && price > 0) {

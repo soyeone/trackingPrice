@@ -3,11 +3,14 @@
  * 사용법: node scraper/track_product.js <올리브영 URL 또는 goodsNo> [가격] [제품명]
  */
 const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 
 process.env.PATH = `C:\\Program Files\\Git\\mingw64\\bin;${process.env.PATH}`;
 
 const SUPABASE_URL = 'https://lgdrqxsgmfighunegehv.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxnZHJxeHNnbWZpZ2h1bmVnZWh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2OTgwNDUsImV4cCI6MjEwNDI3NDA0NX0.CvJYLnbgt3C0PTBXBZoqopfoRRfT8KCTFYCnk8Pg594';
+const COOKIE_FILE = path.join(__dirname, 'cookies.txt');
 
 function extractGoodsNo(input) {
   if (!input) return null;
@@ -75,14 +78,47 @@ function extractCategoryFromHtml(html) {
   return null;
 }
 
-function scrapeOliveYoungDetail(goodsNo) {
+function initSessionCookies() {
+  return new Promise((resolve) => {
+    const args = [
+      '-s', '-L',
+      '-c', COOKIE_FILE,
+      '-A', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      '-H', 'Accept-Language: ko-KR,ko;q=0.9',
+      'https://www.oliveyoung.co.kr/'
+    ];
+    try {
+      const child = spawn('curl.exe', args);
+      child.on('close', () => resolve(true));
+      child.on('error', () => resolve(false));
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+function decodeHtmlEntities(str) {
+  if (!str) return str;
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+async function scrapeOliveYoungDetail(goodsNo) {
   return new Promise((resolve) => {
     const url = `https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo=${goodsNo}`;
     const args = [
       '-s', '-L', '--compressed',
-      '-A', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+      '-A', 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1',
       '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       '-H', 'Accept-Language: ko-KR,ko;q=0.9',
+      '-m', '5',
       url
     ];
 
@@ -97,11 +133,48 @@ function scrapeOliveYoungDetail(goodsNo) {
         }
         const text = Buffer.concat(chunks).toString('utf8');
 
-        const gnMatch = text.match(/goodsName(?:\\*)"\s*:\s*(?:\\*)"([^"\\]+)/);
-        const fpMatch = text.match(/finalPrice(?:\\*)"\s*:\s*([0-9]+)/) || text.match(/salePrice(?:\\*)"\s*:\s*([0-9]+)/);
+        if (text.includes('challenge-platform') || text.includes('잠시만 기다려 주세요')) {
+          return resolve(null);
+        }
 
-        let name = gnMatch ? gnMatch[1] : null;
-        let price = fpMatch ? parseInt(fpMatch[1], 10) : null;
+        // 1. 가격 정보 우선 파싱 (정상 판매 상품 판별의 핵심 기준)
+        const fpMatch = text.match(/finalPrice(?:\\*)"\s*:\s*([0-9]+)/) || text.match(/salePrice(?:\\*)"\s*:\s*([0-9]+)/) || text.match(/<span class="price-2"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/i);
+        let price = null;
+        if (fpMatch) {
+          price = parseInt(fpMatch[1].replace(/,/g, ''), 10);
+        }
+
+        const titleMatch = text.match(/<title>([^<]+)<\/title>/i);
+        const ogTitleMatch = text.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i);
+        const gnMatch = text.match(/goodsName(?:\\*)"\s*:\s*(?:\\*)"([^"\\]+)/) || text.match(/<p class="prd_name">([^<]+)<\/p>/i) || text.match(/data-ref-goodsnm="([^"]+)"/i);
+
+        let name = null;
+        if (titleMatch) {
+          name = decodeHtmlEntities(titleMatch[1].replace(/\s*\|\s*올리브영.*$/, ''));
+        } else if (ogTitleMatch) {
+          name = decodeHtmlEntities(ogTitleMatch[1].replace(/\s*\|\s*올리브영.*$/, ''));
+        } else if (gnMatch) {
+          name = decodeHtmlEntities(gnMatch[1]);
+        }
+
+        // 2. 판매종료/중지/미존재 상품 감지 (명시적 SSR 단종 사유 및 레거시 안내 문구)
+        const hasExplicitDiscontinuedReason =
+          text.includes('ssr:display-period-ended') || // 전시 기간 종료 (판매종료)
+          text.includes('ssr:catalog-error-code') ||     // 카탈로그 에러 (미존재 상품)
+          text.includes('상품을 찾을 수 없어요') ||
+          text.includes('판매종료 또는 중지') ||
+          text.includes('더 이상 판매되지') ||
+          text.includes('판매가 중단') ||
+          text.includes('판매 종료된 상품') ||
+          text.includes('구매할 수 없는 상품');
+
+        const isDefaultMallTitle = (name === '올리브영 온라인몰' || name === '올리브영' || !name);
+
+        // 가격이 없으면서 명시적 단종 사유가 있거나 기본 쇼핑몰 타이틀인 경우만 미존재/판매종료로 판정
+        if (!price && (hasExplicitDiscontinuedReason || isDefaultMallTitle)) {
+          return resolve({ notFound: true, isDiscontinued: true, name: (name && name !== '올리브영 온라인몰' ? name : null) });
+        }
+
         let category = extractCategoryFromHtml(text);
 
         resolve({ name, price, category });
@@ -129,11 +202,16 @@ async function trackSingleProduct(input, manualPrice, manualName) {
   let name = manualName;
   let price = manualPrice ? parseInt(manualPrice, 10) : null;
   let category = null;
+  let isDiscontinued = false;
 
   if (!name || !price) {
     console.log('올리브영에서 실시간 제품 정보 및 가격 조회 중...');
     const scraped = await scrapeOliveYoungDetail(goodsNo);
     if (scraped) {
+      if (scraped.notFound || scraped.isDiscontinued) {
+        isDiscontinued = true;
+        console.log('  ⚠️ 올리브영에서 판매종료 또는 존재하지 않는 상품으로 감지되었습니다.');
+      }
       if (!name) name = scraped.name;
       if (!price) price = scraped.price;
       if (scraped.category) category = scraped.category;
@@ -141,13 +219,29 @@ async function trackSingleProduct(input, manualPrice, manualName) {
   }
 
   name = name || `올리브영 상품 (${goodsNo})`;
-  let productUrl = input.startsWith('http') ? input : `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}`;
+  if (isDiscontinued) {
+    const cleanName = name.replace(/^\[판매종료\]\s*/, '').trim();
+    name = `[판매종료] ${cleanName}`;
+  }
 
-  // URL에 카테고리 정보가 없다면 스크래핑된 카테고리 추가
-  if (category && !productUrl.includes('catName=') && !productUrl.includes('category=')) {
+  let productUrl = input.startsWith('http') ? input : `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}`;
+  if (isDiscontinued && !productUrl.includes('status=discontinued')) {
+    productUrl += (productUrl.includes('?') ? '&status=discontinued' : '?status=discontinued');
+  }
+
+  // 스크래핑된 공식 카테고리가 있다면 URL의 카테고리 정보 보정 및 동기화
+  if (category) {
     const catObj = CATEGORY_LIST.find(c => c.name === category);
-    const catParam = `&catName=${encodeURIComponent(category)}${catObj ? `&dispCatNo=${catObj.id}` : ''}`;
-    productUrl += (productUrl.includes('?') ? catParam : `?goodsNo=${goodsNo}${catParam}`);
+    try {
+      const u = new URL(productUrl);
+      u.searchParams.set('catName', category);
+      if (catObj) u.searchParams.set('dispCatNo', catObj.id);
+      productUrl = u.toString();
+    } catch (e) {
+      productUrl = productUrl.replace(/([?&])(?:catName|dispCatNo)=[^&]*/g, '');
+      const catParam = `&catName=${encodeURIComponent(category)}${catObj ? `&dispCatNo=${catObj.id}` : ''}`;
+      productUrl += (productUrl.includes('?') ? catParam : `?goodsNo=${goodsNo}${catParam}`);
+    }
   }
 
   console.log(` -> 제품명: ${name}`);
@@ -184,7 +278,7 @@ async function trackSingleProduct(input, manualPrice, manualName) {
 
   // 2. prices 테이블에 오늘 일자 가격 즉시 저장
   if (price && price > 0) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
     const pricePayload = {
       goods_no: goodsNo,
       price: price,

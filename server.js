@@ -57,7 +57,32 @@ const server = http.createServer(async (req, res) => {
     try {
       console.log(`[API /api/scrape] 올리브영 실시간 상품 조회 요청: ${goodsNo}`);
       const scraped = await scrapeOliveYoungDetail(goodsNo);
-      if (!scraped || (!scraped.name && !scraped.price)) {
+      if (!scraped) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, message: '올리브영 상품 정보를 불러오지 못했습니다.' }));
+        return;
+      }
+
+      // 판매종료 또는 미존재 상품 응답 처리
+      if (scraped.notFound || scraped.isDiscontinued) {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        const rawName = scraped.name || `올리브영 상품 (${goodsNo})`;
+        const cleanName = rawName.replace(/^\[판매종료\]\s*/, '').trim();
+        const discName = `[판매종료] ${cleanName}`;
+        res.end(JSON.stringify({
+          success: true,
+          isDiscontinued: true,
+          goodsNo,
+          name: discName,
+          price: null,
+          category: scraped.category || null,
+          url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}&status=discontinued`,
+          message: '올리브영에서 판매가 종료되었거나 존재하지 않는 상품입니다.'
+        }));
+        return;
+      }
+
+      if (!scraped.name && !scraped.price) {
         res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ success: false, message: '올리브영 상품 정보를 파싱하지 못했습니다.' }));
         return;

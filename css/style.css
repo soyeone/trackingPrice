@@ -241,6 +241,36 @@ main {
     box-shadow: 0 0 0 3px rgba(155, 210, 32, 0.2);
 }
 
+.discontinued-toggle-wrapper {
+    display: flex;
+    align-items: center;
+}
+
+.toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-sub);
+    cursor: pointer;
+    background: #ffffff;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 20px;
+    padding: 5px 12px;
+    user-select: none;
+    transition: all 0.2s ease;
+}
+
+.toggle-label:hover {
+    border-color: #cbd5e1;
+}
+
+.toggle-label input[type="checkbox"] {
+    accent-color: var(--oy-primary-dark);
+    cursor: pointer;
+}
+
 .view-mode-toggles {
     display: flex;
     gap: 8px;
@@ -526,6 +556,25 @@ main {
     border-radius: 6px;
     font-size: 0.75rem;
     font-weight: 800;
+}
+
+.badge-discontinued {
+    background: #f1f5f9;
+    color: #64748b;
+    border: 1px solid #cbd5e1;
+    padding: 3px 7px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+.product-card.is-discontinued {
+    background: #fafafa;
+    border-color: #e5e7eb;
+}
+
+.product-card.is-discontinued .card-title {
+    color: #6b7280;
 }
 
 .badge-category {
