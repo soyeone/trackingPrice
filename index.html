@@ -144,7 +144,23 @@
                 <!-- 차트 영역 -->
                 <div class="chart-box">
                     <div class="chart-header">
-                        <h3>📈 일자별 가격 변동 추이</h3>
+                        <div class="chart-title-area">
+                            <h3 id="chart-main-title">📈 가격 변동 추이</h3>
+                            <span id="chart-sub-badge" class="chart-badge">일자별 • 최저가</span>
+                        </div>
+                        <div class="chart-controls">
+                            <!-- 기간 단위 선택: 일자별 / 월별 / 연별 -->
+                            <div class="chart-toggle-group" id="chart-period-group" role="group" aria-label="기간 단위 선택">
+                                <button type="button" class="chart-toggle-btn active" data-period="daily">일자별</button>
+                                <button type="button" class="chart-toggle-btn" data-period="monthly">월별</button>
+                                <button type="button" class="chart-toggle-btn" data-period="yearly">연별</button>
+                            </div>
+                            <!-- 집계 기준 선택: 최저가 / 평균가 -->
+                            <div class="chart-toggle-group" id="chart-metric-group" role="group" aria-label="집계 기준 선택">
+                                <button type="button" class="chart-toggle-btn active" data-metric="min">최저가</button>
+                                <button type="button" class="chart-toggle-btn" data-metric="avg">평균가</button>
+                            </div>
+                        </div>
                     </div>
                     <div class="chart-canvas-wrapper">
                         <canvas id="detail-chart"></canvas>
@@ -153,14 +169,25 @@
 
                 <!-- 가격 기록 테이블 -->
                 <div class="history-table-section">
-                    <h3>📋 일자별 가격 기록</h3>
+                    <div class="history-table-header">
+                        <div class="history-title-area">
+                            <h3 id="history-main-title">📋 가격 변동 기록</h3>
+                            <span id="history-badge" class="history-badge">구간별 묶어보기</span>
+                        </div>
+                        <div class="history-controls">
+                            <div class="chart-toggle-group" id="table-mode-group" role="group" aria-label="기록 표시 모드 선택">
+                                <button type="button" class="chart-toggle-btn active" data-table-mode="grouped">구간별 묶어보기</button>
+                                <button type="button" class="chart-toggle-btn" data-table-mode="all">전체 일자별</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="table-responsive">
                         <table class="history-table">
                             <thead>
                                 <tr>
-                                    <th>기록 날짜</th>
+                                    <th id="th-date-col">기간 (유지 일수)</th>
                                     <th>가격 (원)</th>
-                                    <th>전일 대비 변동</th>
+                                    <th id="th-diff-col">이전 대비 변동</th>
                                     <th>상태</th>
                                 </tr>
                             </thead>

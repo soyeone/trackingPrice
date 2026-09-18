@@ -25,6 +25,10 @@ const CATEGORY_LIST = [
 let allProducts = [];
 let pricesByGoodsNo = {};
 let currentChart = null;
+let currentChartPeriod = 'daily';   // 'daily' (일자별) | 'monthly' (월별) | 'yearly' (연별)
+let currentChartMetric = 'min';     // 'min' (최저가) | 'avg' (평균가)
+let currentTableMode = 'grouped';   // 'grouped' (구간별 묶어보기, 기본값) | 'all' (전체 일자별)
+let currentDetailHistory = [];      // 현재 상세 뷰의 가격 이력 데이터
 let selectedCategory = 'all';     // 'all' 또는 특정 카테고리명
 let currentViewMode = 'grouped';   // 'grouped' (카테고리별 묶어보기, 기본값) 또는 'flat' (그리드)
 let currentSortMode = 'rank';      // 'rank' (랭킹순), 'unit_asc' (가성비순), 'price_asc', 'price_desc'
@@ -268,6 +272,12 @@ async function initDashboard() {
                 showListView();
             });
         }
+
+        // 차트 컨트롤 (일자별/월별/연별, 최저가/평균가) 리스너 등록
+        setupChartControls();
+
+        // 가격 기록 테이블 컨트롤 (구간별 묶어보기/전체 일자별) 리스너 등록
+        setupTableControls();
 
         // 브라우저 뒤로가기/앞으로가기 및 URL 해시 감지
         window.addEventListener('popstate', handleUrlRoute);
@@ -1145,10 +1155,136 @@ function showDetailView(goodsNo) {
     }
 
     // 3. 차트 렌더링
+    currentDetailHistory = history;
+    updateChartControlsUI();
     renderDetailChart(history);
 
     // 4. 가격 기록 테이블 렌더링
+    updateTableControlsUI();
     renderHistoryTable(history);
+}
+
+/**
+ * 가격 이력 데이터 기간별(일자별/월별/연별) 및 기준(최저가/평균가) 집계
+ */
+function aggregatePriceHistory(history, period = 'daily', metric = 'min') {
+    if (!history || history.length === 0) {
+        return {
+            labels: [],
+            data: [],
+            details: [],
+            period,
+            metric,
+            periodLabel: '일자별',
+            metricLabel: '최저가'
+        };
+    }
+
+    const periodMap = {
+        daily: '일자별',
+        monthly: '월별',
+        yearly: '연별'
+    };
+    const metricMap = {
+        min: '최저가',
+        avg: '평균가'
+    };
+
+    const periodLabel = periodMap[period] || '일자별';
+    const metricLabel = metricMap[metric] || '최저가';
+
+    // 1. 기간별 그룹핑
+    const groups = new Map();
+
+    history.forEach(item => {
+        if (!item.date || item.price === undefined || item.price === null) return;
+        const priceNum = Number(item.price);
+        if (isNaN(priceNum) || priceNum <= 0) return;
+
+        let groupKey = '';
+        if (period === 'monthly') {
+            groupKey = item.date.substring(0, 7); // 'YYYY-MM'
+        } else if (period === 'yearly') {
+            groupKey = item.date.substring(0, 4); // 'YYYY'
+        } else {
+            groupKey = item.date; // 'YYYY-MM-DD'
+        }
+
+        if (!groups.has(groupKey)) {
+            groups.set(groupKey, {
+                key: groupKey,
+                prices: [],
+                dates: []
+            });
+        }
+        const g = groups.get(groupKey);
+        g.prices.push(priceNum);
+        g.dates.push(item.date);
+    });
+
+    // 2. 키 오름차순 정렬 (시간순)
+    const sortedKeys = Array.from(groups.keys()).sort();
+
+    const labels = [];
+    const data = [];
+    const details = [];
+
+    sortedKeys.forEach(key => {
+        const g = groups.get(key);
+        const prices = g.prices;
+        const minVal = Math.min(...prices);
+        const maxVal = Math.max(...prices);
+        const sum = prices.reduce((acc, cur) => acc + cur, 0);
+        const avgVal = Math.round(sum / prices.length);
+
+        const targetVal = metric === 'avg' ? avgVal : minVal;
+        data.push(targetVal);
+
+        let displayLabel = key;
+        let tooltipTitle = key;
+        let subInfo = null;
+
+        if (period === 'monthly') {
+            const parts = key.split('-');
+            const year = parts[0];
+            const month = parseInt(parts[1], 10);
+            displayLabel = `${year.slice(2)}.${String(month).padStart(2, '0')}`;
+            tooltipTitle = `${year}년 ${month}월`;
+            subInfo = `최저: ${minVal.toLocaleString()}원 / 최고: ${maxVal.toLocaleString()}원 (${prices.length}회 기록)`;
+        } else if (period === 'yearly') {
+            displayLabel = `${key}년`;
+            tooltipTitle = `${key}년`;
+            subInfo = `최저: ${minVal.toLocaleString()}원 / 최고: ${maxVal.toLocaleString()}원 (${prices.length}회 기록)`;
+        } else {
+            displayLabel = key;
+            tooltipTitle = key;
+            if (prices.length > 1) {
+                subInfo = `당일 ${prices.length}회 수집 (최저: ${minVal.toLocaleString()}원 / 최고: ${maxVal.toLocaleString()}원)`;
+            }
+        }
+
+        labels.push(displayLabel);
+        details.push({
+            key,
+            title: tooltipTitle,
+            value: targetVal,
+            min: minVal,
+            max: maxVal,
+            avg: avgVal,
+            count: prices.length,
+            subInfo
+        });
+    });
+
+    return {
+        labels,
+        data,
+        details,
+        period,
+        metric,
+        periodLabel,
+        metricLabel
+    };
 }
 
 /**
@@ -1163,36 +1299,75 @@ function renderDetailChart(history) {
         currentChart = null;
     }
 
+    const badgeEl = document.getElementById('chart-sub-badge');
+    const mainTitleEl = document.getElementById('chart-main-title');
+
     if (!history || history.length === 0) {
+        if (badgeEl) badgeEl.textContent = '데이터 없음';
+        if (mainTitleEl) mainTitleEl.textContent = '📈 가격 변동 추이';
         return;
     }
 
-    const labels = history.map(h => h.date);
-    const data = history.map(h => h.price);
+    const aggregated = aggregatePriceHistory(history, currentChartPeriod, currentChartMetric);
+
+    if (badgeEl) {
+        badgeEl.textContent = `${aggregated.periodLabel} • ${aggregated.metricLabel}`;
+    }
+    if (mainTitleEl) {
+        mainTitleEl.textContent = `📈 ${aggregated.periodLabel} 가격 변동 추이`;
+    }
+
+    if (aggregated.data.length === 0) {
+        return;
+    }
 
     const ctx = canvas.getContext('2d');
+    const isAvg = currentChartMetric === 'avg';
+
+    // 최저가는 올리브영 올리브그린(#7fa818), 평균가는 스마트 블루(#3182f6)
+    const themeColor = isAvg ? '#3182f6' : '#7fa818';
     const gradient = ctx.createLinearGradient(0, 0, 0, 350);
-    gradient.addColorStop(0, 'rgba(155, 210, 32, 0.35)');
-    gradient.addColorStop(1, 'rgba(155, 210, 32, 0.0)');
+    if (isAvg) {
+        gradient.addColorStop(0, 'rgba(49, 130, 246, 0.28)');
+        gradient.addColorStop(1, 'rgba(49, 130, 246, 0.0)');
+    } else {
+        gradient.addColorStop(0, 'rgba(155, 210, 32, 0.35)');
+        gradient.addColorStop(1, 'rgba(155, 210, 32, 0.0)');
+    }
+
+    // 데이터 개수에 따른 포인트 가독성 최적화
+    const pointCount = aggregated.data.length;
+    let pointRadius = 5;
+    let pointHoverRadius = 8;
+    if (pointCount <= 2) {
+        pointRadius = 7;
+        pointHoverRadius = 10;
+    } else if (pointCount <= 10) {
+        pointRadius = 6;
+        pointHoverRadius = 9;
+    } else if (pointCount > 40) {
+        pointRadius = 3;
+        pointHoverRadius = 6;
+    }
 
     currentChart = new Chart(canvas, {
         type: 'line',
         data: {
-            labels: labels,
+            labels: aggregated.labels,
             datasets: [{
-                label: '가격 (원)',
-                data: data,
-                borderColor: '#7fa818',
+                label: `${aggregated.periodLabel} ${aggregated.metricLabel} (원)`,
+                data: aggregated.data,
+                borderColor: themeColor,
                 backgroundColor: gradient,
                 borderWidth: 3,
                 fill: true,
                 tension: 0.25,
                 pointBackgroundColor: '#ffffff',
-                pointBorderColor: '#7fa818',
+                pointBorderColor: themeColor,
                 pointBorderWidth: 2,
-                pointRadius: 5,
-                pointHoverRadius: 8,
-                pointHoverBackgroundColor: '#7fa818',
+                pointRadius: pointRadius,
+                pointHoverRadius: pointHoverRadius,
+                pointHoverBackgroundColor: themeColor,
                 pointHoverBorderColor: '#ffffff',
                 pointHoverBorderWidth: 2
             }]
@@ -1210,13 +1385,28 @@ function renderDetailChart(history) {
                 },
                 tooltip: {
                     backgroundColor: '#191f28',
-                    titleFont: { size: 13, family: 'Pretendard' },
-                    bodyFont: { size: 14, weight: 'bold', family: 'Pretendard' },
+                    titleFont: { size: 13, family: 'Pretendard', weight: 'bold' },
+                    bodyFont: { size: 13, family: 'Pretendard' },
                     padding: 12,
+                    boxPadding: 4,
                     displayColors: false,
                     callbacks: {
+                        title: function(tooltipItems) {
+                            if (!tooltipItems || tooltipItems.length === 0) return '';
+                            const idx = tooltipItems[0].dataIndex;
+                            const detail = aggregated.details[idx];
+                            return detail ? detail.title : tooltipItems[0].label;
+                        },
                         label: function(context) {
-                            return `₩ ${context.parsed.y.toLocaleString()}원`;
+                            return `₩ ${context.parsed.y.toLocaleString()}원 (${aggregated.metricLabel})`;
+                        },
+                        afterLabel: function(context) {
+                            const idx = context.dataIndex;
+                            const detail = aggregated.details[idx];
+                            if (detail && detail.subInfo) {
+                                return `📌 ${detail.subInfo}`;
+                            }
+                            return null;
                         }
                     }
                 }
@@ -1228,7 +1418,10 @@ function renderDetailChart(history) {
                     },
                     ticks: {
                         font: { size: 12, family: 'Pretendard' },
-                        color: '#8b95a1'
+                        color: '#8b95a1',
+                        maxRotation: 45,
+                        autoSkip: true,
+                        maxTicksLimit: 12
                     }
                 },
                 y: {
@@ -1249,50 +1442,295 @@ function renderDetailChart(history) {
 }
 
 /**
+ * 차트 기간/기준 버튼 활성 상태 UI 동기화
+ */
+function updateChartControlsUI() {
+    // 1. 기간 선택 버튼 동기화
+    const periodButtons = document.querySelectorAll('#chart-period-group .chart-toggle-btn');
+    periodButtons.forEach(btn => {
+        if (btn.dataset.period === currentChartPeriod) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+
+    // 2. 기준 선택 버튼 동기화
+    const metricButtons = document.querySelectorAll('#chart-metric-group .chart-toggle-btn');
+    metricButtons.forEach(btn => {
+        if (btn.dataset.metric === currentChartMetric) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+}
+
+/**
+ * 차트 컨트롤(일자/월/연, 최저/평균) 클릭 이벤트 리스너 등록
+ */
+function setupChartControls() {
+    const periodButtons = document.querySelectorAll('#chart-period-group .chart-toggle-btn');
+    periodButtons.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const period = btn.dataset.period;
+            if (currentChartPeriod === period) return;
+            currentChartPeriod = period;
+            updateChartControlsUI();
+            if (currentDetailHistory && currentDetailHistory.length > 0) {
+                renderDetailChart(currentDetailHistory);
+            }
+        });
+    });
+
+    const metricButtons = document.querySelectorAll('#chart-metric-group .chart-toggle-btn');
+    metricButtons.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const metric = btn.dataset.metric;
+            if (currentChartMetric === metric) return;
+            currentChartMetric = metric;
+            updateChartControlsUI();
+            if (currentDetailHistory && currentDetailHistory.length > 0) {
+                renderDetailChart(currentDetailHistory);
+            }
+        });
+    });
+}
+
+/**
+ * 연속 동일 가격 구간 병합
+ * 날짜 오름차순의 history 데이터를 순회하여 동일 가격이 연속된 구간을 하나의 span으로 묶음
+ */
+function groupIdenticalPriceSpans(history) {
+    if (!history || history.length === 0) return [];
+
+    // 유효 데이터 필터링 및 날짜 오름차순 정렬
+    const valid = history.filter(h => h.date && h.price !== null && !isNaN(Number(h.price)) && Number(h.price) > 0);
+    if (valid.length === 0) return [];
+
+    const sorted = [...valid].sort((a, b) => a.date.localeCompare(b.date));
+    const spans = [];
+    let currentSpan = null;
+
+    for (let i = 0; i < sorted.length; i++) {
+        const item = sorted[i];
+        const price = Number(item.price);
+        const date = item.date;
+
+        if (!currentSpan) {
+            currentSpan = {
+                startDate: date,
+                endDate: date,
+                price: price,
+                count: 1,
+                dates: [date]
+            };
+        } else if (currentSpan.price === price) {
+            currentSpan.endDate = date;
+            currentSpan.count++;
+            currentSpan.dates.push(date);
+        } else {
+            spans.push(currentSpan);
+            currentSpan = {
+                startDate: date,
+                endDate: date,
+                price: price,
+                count: 1,
+                dates: [date]
+            };
+        }
+    }
+    if (currentSpan) {
+        spans.push(currentSpan);
+    }
+
+    // 각 구간의 유지 일수 및 이전 구간 대비 변동액/변동률 계산
+    spans.forEach((span, idx) => {
+        const startT = new Date(span.startDate + 'T00:00:00').getTime();
+        const endT = new Date(span.endDate + 'T00:00:00').getTime();
+        const diffDays = Math.round((endT - startT) / (1000 * 60 * 60 * 24)) + 1;
+        span.days = Math.max(diffDays, span.count);
+
+        if (idx === 0) {
+            span.diff = 0;
+            span.diffPct = 0;
+            span.statusType = 'initial';
+            span.statusText = '최초 수집';
+        } else {
+            const prevSpan = spans[idx - 1];
+            span.diff = span.price - prevSpan.price;
+            span.diffPct = ((span.diff / prevSpan.price) * 100).toFixed(1);
+
+            if (span.diff < 0) {
+                span.statusType = 'down';
+                span.statusText = '가격 인하 📉';
+            } else if (span.diff > 0) {
+                span.statusType = 'up';
+                span.statusText = '가격 인상 📈';
+            } else {
+                span.statusType = 'same';
+                span.statusText = '동일';
+            }
+        }
+    });
+
+    if (spans.length > 0) {
+        spans[spans.length - 1].isCurrent = true;
+    }
+
+    return spans;
+}
+
+/**
  * 가격 변동 기록 테이블 렌더링
+ * currentTableMode 에 따라 'grouped'(동일 가격 구간 묶어보기) 또는 'all'(전체 일자별) 렌더링
  */
 function renderHistoryTable(history) {
     const tbody = document.getElementById('history-tbody');
+    const badgeEl = document.getElementById('history-badge');
+    const thDate = document.getElementById('th-date-col');
+    const thDiff = document.getElementById('th-diff-col');
+
     if (!tbody) return;
     tbody.innerHTML = '';
+
+    const isGrouped = currentTableMode === 'grouped';
+    if (badgeEl) {
+        badgeEl.textContent = isGrouped ? '구간별 묶어보기' : '전체 일자별 로그';
+    }
+    if (thDate) {
+        thDate.textContent = isGrouped ? '기간 (유지 기간)' : '기록 날짜';
+    }
+    if (thDiff) {
+        thDiff.textContent = isGrouped ? '이전 대비 변동' : '전일 대비 변동';
+    }
 
     if (!history || history.length === 0) {
         tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#8b95a1; padding:2rem;">아직 수집된 가격 변동 기록이 없습니다.</td></tr>`;
         return;
     }
 
-    const sortedHistory = [...history].reverse();
-
-    sortedHistory.forEach((item, index) => {
-        const tr = document.createElement('tr');
-
-        let diffHtml = '<span class="diff-same">-</span>';
-        let statusHtml = '<span style="color:#8b95a1;">동일</span>';
-
-        if (index < sortedHistory.length - 1) {
-            const prevPrice = sortedHistory[index + 1].price;
-            const diff = item.price - prevPrice;
-            const diffPct = ((diff / prevPrice) * 100).toFixed(1);
-
-            if (diff < 0) {
-                diffHtml = `<span class="diff-down">${diff.toLocaleString()}원 (${diffPct}%)</span>`;
-                statusHtml = `<span class="diff-down">가격 인하 📉</span>`;
-            } else if (diff > 0) {
-                diffHtml = `<span class="diff-up">+${diff.toLocaleString()}원 (+${diffPct}%)</span>`;
-                statusHtml = `<span class="diff-up">가격 인상 📈</span>`;
-            }
-        } else {
-            statusHtml = `<span style="color:#3182f6;">최초 수집</span>`;
+    if (isGrouped) {
+        // [구간별 묶어보기] 모드: 동일 가격 연속 구간을 묶어서 최신순으로 표시
+        const spans = groupIdenticalPriceSpans(history);
+        if (spans.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#8b95a1; padding:2rem;">유효한 가격 기록이 없습니다.</td></tr>`;
+            return;
         }
 
-        tr.innerHTML = `
-            <td><b>${item.date}</b></td>
-            <td><b>${item.price.toLocaleString()}원</b></td>
-            <td>${diffHtml}</td>
-            <td>${statusHtml}</td>
-        `;
+        // 최신 구간이 맨 위에 오도록 역순 정렬
+        const reversedSpans = [...spans].reverse();
 
-        tbody.appendChild(tr);
+        reversedSpans.forEach((span) => {
+            const tr = document.createElement('tr');
+            if (span.isCurrent) {
+                tr.classList.add('current-price-row');
+            }
+
+            let dateHtml = '';
+            if (span.startDate === span.endDate) {
+                dateHtml = `<b>${span.startDate}</b> <span class="span-days-tag">1일간</span>`;
+            } else {
+                dateHtml = `<b>${span.startDate} ~ ${span.endDate}</b> <span class="span-days-tag">${span.days}일간</span>`;
+            }
+            if (span.isCurrent) {
+                dateHtml += ` <span class="span-current-badge">현재 유지 중</span>`;
+            }
+
+            let diffHtml = '<span class="diff-same">-</span>';
+            let statusHtml = `<span style="color:#8b95a1;">${span.statusText}</span>`;
+
+            if (span.statusType === 'down') {
+                diffHtml = `<span class="diff-down">${span.diff.toLocaleString()}원 (${span.diffPct}%)</span>`;
+                statusHtml = `<span class="diff-down">${span.statusText}</span>`;
+            } else if (span.statusType === 'up') {
+                diffHtml = `<span class="diff-up">+${span.diff.toLocaleString()}원 (+${span.diffPct}%)</span>`;
+                statusHtml = `<span class="diff-up">${span.statusText}</span>`;
+            } else if (span.statusType === 'initial') {
+                diffHtml = '<span class="diff-same">-</span>';
+                statusHtml = `<span style="color:#3182f6;">최초 수집</span>`;
+            }
+
+            tr.innerHTML = `
+                <td>${dateHtml}</td>
+                <td><b>${span.price.toLocaleString()}원</b></td>
+                <td>${diffHtml}</td>
+                <td>${statusHtml}</td>
+            `;
+
+            tbody.appendChild(tr);
+        });
+
+    } else {
+        // [전체 일자별] 모드: 매일 기록된 원본 로그를 최신순으로 표시
+        const sortedHistory = [...history].reverse();
+
+        sortedHistory.forEach((item, index) => {
+            const tr = document.createElement('tr');
+
+            let diffHtml = '<span class="diff-same">-</span>';
+            let statusHtml = '<span style="color:#8b95a1;">동일</span>';
+
+            if (index < sortedHistory.length - 1) {
+                const prevPrice = sortedHistory[index + 1].price;
+                const diff = item.price - prevPrice;
+                const diffPct = ((diff / prevPrice) * 100).toFixed(1);
+
+                if (diff < 0) {
+                    diffHtml = `<span class="diff-down">${diff.toLocaleString()}원 (${diffPct}%)</span>`;
+                    statusHtml = `<span class="diff-down">가격 인하 📉</span>`;
+                } else if (diff > 0) {
+                    diffHtml = `<span class="diff-up">+${diff.toLocaleString()}원 (+${diffPct}%)</span>`;
+                    statusHtml = `<span class="diff-up">가격 인상 📈</span>`;
+                }
+            } else {
+                statusHtml = `<span style="color:#3182f6;">최초 수집</span>`;
+            }
+
+            tr.innerHTML = `
+                <td><b>${item.date}</b></td>
+                <td><b>${item.price.toLocaleString()}원</b></td>
+                <td>${diffHtml}</td>
+                <td>${statusHtml}</td>
+            `;
+
+            tbody.appendChild(tr);
+        });
+    }
+}
+
+/**
+ * 테이블 표시 모드 버튼 활성 상태 UI 동기화
+ */
+function updateTableControlsUI() {
+    const tableButtons = document.querySelectorAll('#table-mode-group .chart-toggle-btn');
+    tableButtons.forEach(btn => {
+        if (btn.dataset.tableMode === currentTableMode) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+}
+
+/**
+ * 테이블 컨트롤(구간별 묶어보기/전체 일자별) 클릭 이벤트 리스너 등록
+ */
+function setupTableControls() {
+    const tableButtons = document.querySelectorAll('#table-mode-group .chart-toggle-btn');
+    tableButtons.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const mode = btn.dataset.tableMode;
+            if (currentTableMode === mode) return;
+            currentTableMode = mode;
+            updateTableControlsUI();
+            if (currentDetailHistory && currentDetailHistory.length > 0) {
+                renderHistoryTable(currentDetailHistory);
+            }
+        });
     });
 }
 
