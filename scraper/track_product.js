@@ -32,7 +32,7 @@ const CATEGORY_LIST = [
   { id: '10000010005', name: '향수/디퓨저' },
   { id: '10000020001', name: '건강식품' },
   { id: '10000020003', name: '구강용품' },
-  { id: '10000010007', name: '맨즈에딧' }
+  { id: '10000060002', name: '맨즈에딧' }
 ];
 
 function extractCategoryFromHtml(html) {

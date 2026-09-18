@@ -18,7 +18,7 @@ const CATEGORY_LIST = [
     { id: '10000010005', name: '향수/디퓨저', icon: '💐' },
     { id: '10000020001', name: '건강식품', icon: '💊' },
     { id: '10000020003', name: '구강용품', icon: '🪥' },
-    { id: '10000010007', name: '맨즈에딧', icon: '🧔' }
+    { id: '10000060002', name: '맨즈에딧', icon: '🧔' }
 ];
 
 // 전역 상태
@@ -168,7 +168,7 @@ async function initDashboard() {
                 }
             }
 
-            const { category, rank } = extractProductMeta(prod);
+            const { category, rank, catRanks } = extractProductMeta(prod);
             const capInfo = parseCapacity(prod.name);
             const unitPriceInfo = calculateUnitPrice(currentPrice, capInfo);
 
@@ -182,6 +182,7 @@ async function initDashboard() {
 
             // 판매종료/단종 상품은 과거 랭킹 잔여값 무시 및 랭킹 태그 완전 제거
             const finalRank = is_discontinued ? null : rank;
+            const finalCatRanks = is_discontinued ? {} : catRanks;
 
             let displayName = prod.name || `올리브영 상품 (${prod.goods_no})`;
             if (is_discontinued && !displayName.includes('[판매종료]')) {
@@ -193,6 +194,7 @@ async function initDashboard() {
                 displayName,
                 category,
                 rank: finalRank,
+                catRanks: finalCatRanks,
                 is_discontinued,
                 currentPrice,
                 minPrice,
@@ -531,10 +533,38 @@ function extractProductMeta(prod) {
                 rank = parseInt(rankParam, 10);
             }
 
-            // 판매종료 상품인 경우 과거 rank 파라미터 무시
+            // 다중 카테고리 랭킹 파싱 (catRanks=스킨케어:5|더모 코스메틱:2)
+            let catRanks = {};
+            const catRanksParam = urlObj.searchParams.get('catRanks');
+            if (catRanksParam) {
+                try {
+                    const decoded = decodeURIComponent(catRanksParam);
+                    const pairs = decoded.split('|');
+                    for (const pair of pairs) {
+                        const [cName, cRank] = pair.split(':');
+                        if (cName && cRank && !isNaN(parseInt(cRank, 10))) {
+                            catRanks[cName.trim()] = parseInt(cRank, 10);
+                        }
+                    }
+                } catch (e) {}
+            }
+
+            // catRanks가 비어있고 대표 카테고리와 랭킹이 있다면 기본값 설정
+            if (category && rank && Object.keys(catRanks).length === 0) {
+                catRanks[category] = rank;
+            }
+
+            // 판매종료 상품인 경우 과거 rank 및 catRanks 파라미터 무시
             if (urlObj.searchParams.get('status') === 'discontinued' || (prod.name && prod.name.includes('[판매종료]'))) {
                 rank = null;
+                catRanks = {};
             }
+
+            if (!category) {
+                category = prod.is_custom ? '직접 등록' : '기타';
+            }
+
+            return { category, rank, catRanks };
         } catch (e) {}
     }
 
@@ -542,7 +572,7 @@ function extractProductMeta(prod) {
         category = prod.is_custom ? '직접 등록' : '기타';
     }
 
-    return { category, rank };
+    return { category, rank, catRanks: (category && rank) ? { [category]: rank } : {} };
 }
 
 /**
@@ -553,10 +583,17 @@ function renderCategoryFilterBar() {
     if (!filterBar) return;
     filterBar.innerHTML = '';
 
-    // 카테고리별 상품 수 계산
+    // 카테고리별 상품 수 계산 (다중 카테고리 포함)
     const categoryCounts = {};
     allProducts.forEach(p => {
-        categoryCounts[p.category] = (categoryCounts[p.category] || 0) + 1;
+        if (p.is_discontinued && hideDiscontinued) return;
+        if (p.catRanks && Object.keys(p.catRanks).length > 0) {
+            Object.keys(p.catRanks).forEach(cName => {
+                categoryCounts[cName] = (categoryCounts[cName] || 0) + 1;
+            });
+        } else if (p.category) {
+            categoryCounts[p.category] = (categoryCounts[p.category] || 0) + 1;
+        }
     });
 
     // 1. '전체' 탭
@@ -700,7 +737,31 @@ function renderView() {
         if (selectedCategory === '직접 등록') {
             categoryFiltered = filtered.filter(p => p.is_custom);
         } else if (selectedCategory !== 'all') {
-            categoryFiltered = filtered.filter(p => p.category === selectedCategory);
+            // 선택된 카테고리에 속한 상품 필터링 및 해당 카테고리 랭킹으로 동적 매핑
+            categoryFiltered = filtered
+                .filter(p => (p.catRanks && p.catRanks[selectedCategory] !== undefined) || p.category === selectedCategory)
+                .map(p => {
+                    if (p.catRanks && p.catRanks[selectedCategory] !== undefined) {
+                        return {
+                            ...p,
+                            category: selectedCategory,
+                            rank: p.catRanks[selectedCategory]
+                        };
+                    }
+                    return p;
+                });
+        } else {
+            // 'all' 전체 그리드 뷰: 복수 랭킹 중 최고 순위(최소 랭킹 숫자)를 기준으로 표시
+            categoryFiltered = filtered.map(p => {
+                if (p.catRanks && Object.keys(p.catRanks).length > 0) {
+                    const minRank = Math.min(...Object.values(p.catRanks));
+                    return {
+                        ...p,
+                        rank: minRank
+                    };
+                }
+                return p;
+            });
         }
 
         // 선택된 정렬 기준(랭킹순, 가성비순, 가격순) 적용
@@ -716,12 +777,24 @@ function renderView() {
 function renderCategoryGroupedView(container, products) {
     container.innerHTML = '';
 
-    // 존재하는 카테고리별 그룹화
+    // 존재하는 카테고리별 그룹화 (다중 카테고리 상품 분리 복제)
     const groups = {};
     products.forEach(p => {
-        const cat = p.category || '기타';
-        if (!groups[cat]) groups[cat] = [];
-        groups[cat].push(p);
+        if (p.catRanks && Object.keys(p.catRanks).length > 0) {
+            Object.keys(p.catRanks).forEach(cName => {
+                if (!groups[cName]) groups[cName] = [];
+                // 해당 카테고리에 맞는 rank와 category를 가진 파생 객체 생성
+                groups[cName].push({
+                    ...p,
+                    category: cName,
+                    rank: p.catRanks[cName]
+                });
+            });
+        } else {
+            const cat = p.category || '기타';
+            if (!groups[cat]) groups[cat] = [];
+            groups[cat].push(p);
+        }
     });
 
     // 1. CATEGORY_LIST 순서대로 섹션 생성

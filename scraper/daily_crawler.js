@@ -31,7 +31,7 @@ const CATEGORIES = [
   { catName: '향수/디퓨저', catNo: '10000010005' },
   { catName: '건강식품', catNo: '10000020001' },
   { catName: '구강용품', catNo: '10000020003' },
-  { catName: '맨즈에딧', catNo: '10000010007' },
+  { catName: '맨즈에딧', catNo: '10000060002' },
 ];
 
 function log(msg) {
@@ -170,12 +170,12 @@ function parseProductsFromHtml(html, cat, discontinuedSet = new Set()) {
   const validItems = [];
   const brokenOrDiscontinuedItems = [];
 
-  // li 단위 또는 prd_info 단위 블록 분할 (품절/판매종료 플래그를 온전히 포함하기 위해 li 우선 분할)
-  const liBlocks = html.split(/<li\s+class="flag"/i);
-  const blocksToProcess = liBlocks.length > 1 ? liBlocks.slice(1) : html.split(/<div class="prd_info\s*">/g).slice(1);
+  // 올리브영 랭킹 상품 100개 전수 분할
+  const prdInfoBlocks = html.split(/<div class="prd_info\s*">/g);
+  const blocksToProcess = prdInfoBlocks.slice(1);
 
   for (let i = 0; i < blocksToProcess.length; i++) {
-    const block = blocksToProcess[i].split(/<\/li>/)[0];
+    const block = blocksToProcess[i].split(/<\/div>\s*<\/li>/)[0];
 
     const goodsNoMatch = block.match(/data-ref-goodsNo="([A-Za-z0-9]+)"/i) || block.match(/goodsNo=([A-Za-z0-9]+)/i);
     if (!goodsNoMatch) continue;
@@ -561,14 +561,25 @@ async function main() {
     const THEME_CATEGORIES = ['더모 코스메틱', '맨즈에딧'];
 
     for (const item of items) {
-      if (collectedMap.has(item.goods_no)) {
+      if (!collectedMap.has(item.goods_no)) {
+        collectedMap.set(item.goods_no, {
+          ...item,
+          catRanks: item.rank ? { [cat.catName]: item.rank } : {}
+        });
+      } else {
         const existing = collectedMap.get(item.goods_no);
-        // 기존이 제형 본 카테고리(스킨케어, 클렌징 등)이고 현재가 테마 카테고리면 기존 본 카테고리 랭킹 보존
-        if (THEME_CATEGORIES.includes(cat.catName) && !THEME_CATEGORIES.includes(existing.category)) {
-          continue;
+        if (!existing.catRanks) existing.catRanks = {};
+        if (item.rank) {
+          existing.catRanks[cat.catName] = item.rank;
+        }
+        // 대표 카테고리 선정: 제형 본 카테고리(스킨케어, 클렌징 등) 우선
+        if (THEME_CATEGORIES.includes(existing.category) && !THEME_CATEGORIES.includes(cat.catName)) {
+          existing.category = cat.catName;
+          existing.cat_no = cat.catNo;
+          existing.rank = item.rank;
+          existing.url = item.url;
         }
       }
-      collectedMap.set(item.goods_no, item);
     }
     log(`  ✅ [${cat.catName}] ${items.length}개 상품 수집 완료`);
     await new Promise(r => setTimeout(r, 1200));
@@ -645,7 +656,10 @@ async function main() {
       }
 
       if (scraped && scraped.price) {
-        let cleanUrl = (p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`).replace(/&rank=[0-9]+/, '');
+        let cleanUrl = (p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`)
+          .replace(/([?&])rank=[0-9]+&?/g, '$1')
+          .replace(/([?&])catRanks=[^&]*&?/g, '$1')
+          .replace(/[?&]$/, '');
 
         // 1. 기존 URL에서 현재 등록된 카테고리 정보 확인
         let existingCat = null;
@@ -738,13 +752,23 @@ async function main() {
     process.exit(1);
   }
 
-  // products 테이블 갱신/신규등록
-  const productPayloads = allItems.map(p => ({
-    goods_no: p.goods_no,
-    name: p.name,
-    url: p.url,
-    is_custom: p.is_custom || false
-  }));
+  // products 테이블 갱신/신규등록 (다중 카테고리 랭킹 catRanks 결합)
+  const productPayloads = allItems.map(p => {
+    let finalUrl = p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`;
+    if (p.catRanks && Object.keys(p.catRanks).length > 0 && !p.is_discontinued) {
+      const catRanksStr = Object.entries(p.catRanks).map(([cn, rk]) => `${cn}:${rk}`).join('|');
+      finalUrl = finalUrl.replace(/([?&])catRanks=[^&]*/g, '');
+      finalUrl += (finalUrl.includes('?') ? `&catRanks=${encodeURIComponent(catRanksStr)}` : `?catRanks=${encodeURIComponent(catRanksStr)}`);
+    } else if (p.is_discontinued) {
+      finalUrl = finalUrl.replace(/([?&])catRanks=[^&]*/g, '');
+    }
+    return {
+      goods_no: p.goods_no,
+      name: p.name,
+      url: finalUrl,
+      is_custom: p.is_custom || false
+    };
+  });
   await batchUpsertProducts(productPayloads);
 
   // prices 테이블 당일 가격 저장 (유효한 가격이 있는 정상 상품만 저장)

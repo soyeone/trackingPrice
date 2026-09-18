@@ -20,7 +20,7 @@ const CATEGORIES = [
   { catName: '향수/디퓨저', catNo: '10000010005' },
   { catName: '건강식품', catNo: '10000020001' },
   { catName: '구강용품', catNo: '10000020003' },
-  { catName: '맨즈에딧', catNo: '10000010007' },
+  { catName: '맨즈에딧', catNo: '10000060002' },
 ];
 
 function fetchCategoryHtml(catNo, maxRetries = 3) {
