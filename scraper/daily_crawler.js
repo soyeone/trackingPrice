@@ -457,13 +457,19 @@ async function fetchAllDbProducts() {
 
 
 async function exportStaticData() {
-  log('4단계: 정적 JSON 데이터 구워내기 (Static API)');
+  log('4단계: 정적 JSON 데이터 구워내기 (Static API - Incremental)');
   const headers = {
     'apikey': SUPABASE_KEY,
     'Authorization': `Bearer ${SUPABASE_KEY}`,
     'Content-Type': 'application/json'
   };
 
+  const dataDir = path.join(__dirname, '..', 'data');
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
+  const productsFile = path.join(dataDir, 'products.json');
+  const pricesFile = path.join(dataDir, 'prices.json');
+
+  // 1. Fetch all products (상품 데이터는 랭킹 갱신 등을 위해 매번 전체 조회)
   let allProducts = [];
   let from = 0;
   const limit = 1000;
@@ -475,24 +481,47 @@ async function exportStaticData() {
     if (data.length < limit) break;
     from += limit;
   }
+  fs.writeFileSync(productsFile, JSON.stringify(allProducts), 'utf8');
 
-  let allPrices = [];
+  // 2. Fetch prices smartly (기존 JSON이 있으면 최신 날짜 이후만 조회)
+  let existingPrices = [];
+  let maxDate = null;
+  if (fs.existsSync(pricesFile)) {
+    try {
+      existingPrices = JSON.parse(fs.readFileSync(pricesFile, 'utf8'));
+      if (existingPrices.length > 0) {
+        maxDate = existingPrices.reduce((max, p) => p.date > max ? p.date : max, '2000-01-01');
+      }
+    } catch (e) {
+      log('  -> 기존 prices.json 파싱 실패, 전체 재수집 진행');
+    }
+  }
+
+  let newPrices = [];
   from = 0;
+  // 당일 재실행을 고려해 gte(크거나 같음)로 조회하여 당일 데이터를 덮어씀
+  let dateFilter = maxDate ? `&date=gte.${maxDate}` : '';
+  
   while (true) {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/prices?select=*&order=date.asc&offset=${from}&limit=${limit}`, { headers });
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/prices?select=*&order=date.asc${dateFilter}&offset=${from}&limit=${limit}`, { headers });
     const data = await res.json();
     if (!data || data.length === 0) break;
-    allPrices.push(...data);
+    newPrices.push(...data);
     if (data.length < limit) break;
     from += limit;
   }
 
-  const dataDir = path.join(__dirname, '..', 'data');
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
-  
-  fs.writeFileSync(path.join(dataDir, 'products.json'), JSON.stringify(allProducts), 'utf8');
-  fs.writeFileSync(path.join(dataDir, 'prices.json'), JSON.stringify(allPrices), 'utf8');
-  log(`  -> 정적 JSON 파일 생성 완료 (${allProducts.length}개 상품, ${allPrices.length}건 가격)`);
+  if (newPrices.length > 0) {
+    if (maxDate) {
+      // 덮어쓰기를 위해 maxDate와 같거나 이후인 기존 캐시 데이터 제거
+      existingPrices = existingPrices.filter(p => p.date < maxDate);
+    }
+    existingPrices.push(...newPrices);
+    fs.writeFileSync(pricesFile, JSON.stringify(existingPrices), 'utf8');
+    log(`  -> 정적 JSON 갱신 완료 (상품: ${allProducts.length}개, 신규추가: ${newPrices.length}건, 총누적: ${existingPrices.length}건)`);
+  } else {
+    log(`  -> 정적 JSON 갱신 완료 (상품: ${allProducts.length}개, 신규 가격 없음)`);
+  }
 
   log('  -> GitHub 저장소로 정적 파일 푸시 진행 중...');
   const { execSync } = require('child_process');
