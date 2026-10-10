@@ -167,8 +167,7 @@ function fetchCategoryHtml(catNo, maxRetries = 2) {
 }
 
 function parseProductsFromHtml(html, cat, discontinuedSet = new Set()) {
-  const validItems = [];
-  const brokenOrDiscontinuedItems = [];
+  const items = [];
 
   // 올리브영 랭킹 상품 100개 전수 분할
   const prdInfoBlocks = html.split(/<div class="prd_info\s*">/g);
@@ -193,66 +192,50 @@ function parseProductsFromHtml(html, cat, discontinuedSet = new Set()) {
       price = parseInt(priceMatch[1].replace(/,/g, ''), 10);
     }
 
-    // 품절, 판매종료, 구매불가 여부 감지
-    const isSoldOut =
-      block.includes('icon_flag soldout') ||
-      block.includes('class="soldout"') ||
-      block.includes('일시품절') ||
+    // 올리브영 공식 랭킹 뱃지 번호 직접 파싱 (<span class="thumb_flag best">01</span> 등)
+    const rankMatch = block.match(/<span class="thumb_flag best">([0-9]+)<\/span>/i);
+    const officialRank = rankMatch ? parseInt(rankMatch[1], 10) : (i + 1);
+
+    // 명시적 판매종료 여부만 감지 (일시품절은 제외 - 일시품절은 정상 상품으로 유지)
+    const isExplicitEnded =
       block.includes('판매종료') ||
       block.includes('구매불가') ||
       block.includes('판매중단');
 
-    const isAlreadyDiscontinued = discontinuedSet.has(goodsNo);
-    const isPriceMissing = (!price || price <= 0);
+    const cleanName = name.replace(/^\[판매종료\]\s*/, '').trim();
 
-    const isDiscontinuedOrBroken = isSoldOut || isAlreadyDiscontinued || isPriceMissing;
+    // 제품 정보(가격 및 상품명)가 확인되는 경우 일시품절 여부와 무관하게 정상 상품으로 유지
+    // 가격이 없거나 명시적으로 판매종료인 경우에만 판매종료 처리
+    const isDiscontinued = isExplicitEnded || (price <= 0 && discontinuedSet.has(goodsNo));
 
     if (goodsNo && name) {
-      if (!isDiscontinuedOrBroken && price > 0) {
-        validItems.push({
+      if (!isDiscontinued && price > 0) {
+        items.push({
           goods_no: goodsNo,
-          name: name,
+          name: cleanName,
           price: price,
           category: cat.catName,
           cat_no: cat.catNo,
+          rank: officialRank,
+          url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}&dispCatNo=${cat.catNo}&catName=${encodeURIComponent(cat.catName)}&rank=${officialRank}`,
           is_discontinued: false
         });
       } else {
-        const cleanName = name.replace(/^\[판매종료\]\s*/, '').trim();
-        brokenOrDiscontinuedItems.push({
+        items.push({
           goods_no: goodsNo,
           name: `[판매종료] ${cleanName}`,
           price: price > 0 ? price : null,
           category: cat.catName,
           cat_no: cat.catNo,
+          rank: null,
+          url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${goodsNo}&dispCatNo=${cat.catNo}&catName=${encodeURIComponent(cat.catName)}&status=discontinued`,
           is_discontinued: true
         });
       }
     }
   }
 
-  // [재정렬] 정상 판매 상품은 1위부터 순서대로, 판매종료/링크불가 제품은 100위 목록의 가장 끝으로 재배치
-  const reordered = [];
-  let currentRank = 1;
-
-  for (const item of validItems) {
-    reordered.push({
-      ...item,
-      rank: currentRank,
-      url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${item.goods_no}&dispCatNo=${cat.catNo}&catName=${encodeURIComponent(cat.catName)}&rank=${currentRank}`
-    });
-    currentRank++;
-  }
-
-  for (const item of brokenOrDiscontinuedItems) {
-    reordered.push({
-      ...item,
-      rank: null, // 판매종료/링크불가 상품은 랭킹 태그를 부여하지 않음 (순위 없음)
-      url: `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${item.goods_no}&dispCatNo=${cat.catNo}&catName=${encodeURIComponent(cat.catName)}&status=discontinued`
-    });
-  }
-
-  return reordered;
+  return items;
 }
 
 function extractCategoryFromHtml(html) {
@@ -421,10 +404,11 @@ async function fetchDiscontinuedGoodsNos() {
 
   while (true) {
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/products?select=goods_no&or=(url.like.*status=discontinued*,name.like.*판매종료*)&range=${from}-${from + limit - 1}`, {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/products?select=goods_no&or=(url.like.*status=discontinued*,name.like.*판매종료*)`, {
         headers: {
           'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Range': `${from}-${from + limit - 1}`
         }
       });
       if (!res.ok) break;
@@ -469,6 +453,58 @@ async function fetchAllDbProducts() {
   }
 
   return all;
+}
+
+
+async function exportStaticData() {
+  log('4단계: 정적 JSON 데이터 구워내기 (Static API)');
+  const headers = {
+    'apikey': SUPABASE_KEY,
+    'Authorization': `Bearer ${SUPABASE_KEY}`,
+    'Content-Type': 'application/json'
+  };
+
+  let allProducts = [];
+  let from = 0;
+  const limit = 1000;
+  while (true) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/products?select=*&offset=${from}&limit=${limit}`, { headers });
+    const data = await res.json();
+    if (!data || data.length === 0) break;
+    allProducts.push(...data);
+    if (data.length < limit) break;
+    from += limit;
+  }
+
+  let allPrices = [];
+  from = 0;
+  while (true) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/prices?select=*&order=date.asc&offset=${from}&limit=${limit}`, { headers });
+    const data = await res.json();
+    if (!data || data.length === 0) break;
+    allPrices.push(...data);
+    if (data.length < limit) break;
+    from += limit;
+  }
+
+  const dataDir = path.join(__dirname, '..', 'data');
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
+  
+  fs.writeFileSync(path.join(dataDir, 'products.json'), JSON.stringify(allProducts), 'utf8');
+  fs.writeFileSync(path.join(dataDir, 'prices.json'), JSON.stringify(allPrices), 'utf8');
+  log(`  -> 정적 JSON 파일 생성 완료 (${allProducts.length}개 상품, ${allPrices.length}건 가격)`);
+
+  log('  -> GitHub 저장소로 정적 파일 푸시 진행 중...');
+  const { execSync } = require('child_process');
+  try {
+    const cwd = path.join(__dirname, '..');
+    execSync('git add data/products.json data/prices.json', { cwd, stdio: 'ignore' });
+    execSync('git commit -m "chore: auto-update static JSON data"', { cwd, stdio: 'ignore' });
+    execSync('git push', { cwd, stdio: 'ignore' });
+    log('  -> GitHub 푸시 완료!');
+  } catch (err) {
+    log('  -> Git 푸시 스킵 (변경사항 없거나 오류)');
+  }
 }
 
 async function batchUpsertProducts(products) {
@@ -657,6 +693,7 @@ async function main() {
       }
 
       let cleanUrl = (p.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${p.goods_no}`)
+        .replace(/([?&])status=discontinued&?/g, '$1')
         .replace(/([?&])rank=[0-9]+&?/g, '$1')
         .replace(/([?&])catRanks=[^&]*&?/g, '$1')
         .replace(/[?&]$/, '');
@@ -696,7 +733,8 @@ async function main() {
       }
 
       const validScrapedName = scraped && scraped.name && scraped.name !== '올리브영 온라인몰' && scraped.name !== '올리브영';
-      const finalName = validScrapedName ? scraped.name : (p.name && p.name !== p.goods_no ? p.name : `올리브영 상품 (${p.goods_no})`);
+      const rawName = validScrapedName ? scraped.name : (p.name && p.name !== p.goods_no ? p.name : `올리브영 상품 (${p.goods_no})`);
+      const finalName = rawName.replace(/^\[판매종료\]\s*/, '').trim();
 
       if (scraped && scraped.price) {
         if (p.name && finalName !== p.name) {
@@ -814,6 +852,7 @@ async function main() {
     if (fs.existsSync(COOKIE_FILE_MOB)) fs.unlinkSync(COOKIE_FILE_MOB);
   } catch (e) {}
 
+  await exportStaticData();
   log(`상태 저장 완료: ${STATE_FILE}`);
   log(`====================================================\n`);
 }
