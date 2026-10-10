@@ -124,6 +124,55 @@ function setViewMode(mode) {
     renderView();
 }
 
+const CACHE_KEY_PRODUCTS = 'oy_tracker_products';
+const CACHE_KEY_PRICES = 'oy_tracker_prices';
+const CACHE_TIMESTAMP_KEY = 'oy_tracker_timestamp';
+
+async function loadDataWithCache() {
+    let rawProducts, rawPrices;
+    let usingCache = false;
+    const now = Date.now();
+    const cachedTime = localStorage.getItem(CACHE_TIMESTAMP_KEY);
+
+    // 4시간 이내 캐시 사용
+    if (cachedTime && (now - parseInt(cachedTime)) < 4 * 60 * 60 * 1000) {
+        try {
+            const cachedProducts = localStorage.getItem(CACHE_KEY_PRODUCTS);
+            const cachedPrices = localStorage.getItem(CACHE_KEY_PRICES);
+            if (cachedProducts && cachedPrices) {
+                rawProducts = JSON.parse(cachedProducts);
+                rawPrices = JSON.parse(cachedPrices);
+                usingCache = true;
+                console.log('[대시보드] 로컬 캐시에서 데이터를 즉시 로드했습니다.');
+            }
+        } catch(e) {
+            console.warn('캐시 파싱 오류:', e);
+        }
+    }
+
+    if (!usingCache) {
+        console.log('[대시보드] Supabase 데이터 조회 시작 (캐시 없음 또는 만료)...');
+        [rawProducts, rawPrices] = await Promise.all([
+            fetchAllProducts(),
+            fetchAllPrices()
+        ]);
+        
+        // 캐시 비동기 저장
+        setTimeout(() => {
+            try {
+                localStorage.setItem(CACHE_KEY_PRODUCTS, JSON.stringify(rawProducts));
+                localStorage.setItem(CACHE_KEY_PRICES, JSON.stringify(rawPrices));
+                localStorage.setItem(CACHE_TIMESTAMP_KEY, now.toString());
+                console.log('[대시보드] 데이터를 로컬 캐시에 저장했습니다.');
+            } catch (e) {
+                console.warn('캐시 저장 실패 (용량 부족 등):', e);
+            }
+        }, 100);
+    }
+    
+    return [rawProducts, rawPrices, usingCache];
+}
+
 /**
  * 대시보드 초기화 및 데이터 로딩
  */
@@ -137,13 +186,11 @@ async function initDashboard() {
     const btnViewFlat = document.getElementById('btn-view-flat');
 
     try {
-        console.log('[대시보드] Supabase 데이터 조회 시작...');
-        // DB에서 전체 제품 및 가격 데이터 페이징 조회
-        const [rawProducts, rawPrices] = await Promise.all([
-            fetchAllProducts(),
-            fetchAllPrices()
-        ]);
-        console.log(`[대시보드] 데이터 로드 완료 - 상품: ${rawProducts.length}개, 가격: ${rawPrices.length}건`);
+        const [rawProducts, rawPrices, usingCache] = await loadDataWithCache();
+        
+        if (!usingCache) {
+            console.log(`[대시보드] 데이터 로드 완료 - 상품: ${rawProducts.length}개, 가격: ${rawPrices.length}건`);
+        }
 
         // 가격 데이터를 goods_no 키로 그룹핑
         pricesByGoodsNo = {};
@@ -176,15 +223,14 @@ async function initDashboard() {
             const capInfo = parseCapacity(prod.name);
             const unitPriceInfo = calculateUnitPrice(currentPrice, capInfo);
 
-            // 판매종료 또는 링크를 찾을 수 없는 제품 판별
+            // 판매종료 또는 링크를 찾을 수 없는 제품 판별 (일시품절이나 제품정보가 있는 상품은 정상 유지)
             const is_link_broken = !prod.url || prod.url.trim() === '' || prod.url.includes('notFound=true') || prod.url.includes('status=discontinued');
             const is_discontinued = !!(
                 is_link_broken ||
-                (prod.name && prod.name.includes('[판매종료]')) ||
-                (currentPrice === null || currentPrice === undefined || currentPrice <= 0)
+                (prod.name && prod.name.includes('[판매종료]'))
             );
 
-            // 판매종료/단종 상품은 과거 랭킹 잔여값 무시 및 랭킹 태그 완전 제거
+            // 판매종료 상품만 과거 랭킹 잔여값 무시 및 랭킹 태그 제거
             const finalRank = is_discontinued ? null : rank;
             const finalCatRanks = is_discontinued ? {} : catRanks;
 
@@ -471,8 +517,8 @@ function calculateUnitPrice(price, capInfo) {
  */
 function sortProducts(list, sortMode) {
     return [...list].sort((a, b) => {
-        const aBroken = !!(a.is_discontinued || !a.currentPrice || a.currentPrice <= 0);
-        const bBroken = !!(b.is_discontinued || !b.currentPrice || b.currentPrice <= 0);
+        const aBroken = !!a.is_discontinued;
+        const bBroken = !!b.is_discontinued;
 
         // 1. 정상 판매 상품 vs 판매종료/링크불가 상품 분리
         // broken 상품은 항상 뒤(+1)로 이동하여 가장 끝에 정렬됨
