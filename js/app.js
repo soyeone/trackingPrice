@@ -144,32 +144,52 @@ async function loadDataWithCache() {
                 rawPrices = JSON.parse(cachedPrices);
                 usingCache = true;
                 console.log('[대시보드] 로컬 캐시에서 데이터를 즉시 로드했습니다.');
+                return [rawProducts, rawPrices, usingCache];
             }
         } catch(e) {
             console.warn('캐시 파싱 오류:', e);
         }
     }
 
-    if (!usingCache) {
-        console.log('[대시보드] Supabase 데이터 조회 시작 (캐시 없음 또는 만료)...');
+    console.log('[대시보드] 데이터 조회 시작 (캐시 없음 또는 만료)...');
+    try {
+        // 1순위: 정적 JSON 파일에서 초고속 로드 시도
+        const timestamp = new Date().getTime(); // 캐시 무효화 (또는 해시로 캐시 유지)
+        
+        // Use latest_prices.json instead of full prices.json for initial load
+        const [prodRes, priceRes] = await Promise.all([
+            fetch(`data/products.json?t=${timestamp}`),
+            fetch(`data/latest_prices.json?t=${timestamp}`)
+        ]);
+
+        if (prodRes.ok && priceRes.ok) {
+            rawProducts = await prodRes.json();
+            rawPrices = await priceRes.json();
+            console.log('[대시보드] GitHub 정적 JSON 파일에서 데이터를 로드했습니다 (초고속).');
+        } else {
+            throw new Error('JSON 파일 없음');
+        }
+    } catch (err) {
+        // 2순위: JSON 파일이 없거나 오류 발생 시 기존처럼 Supabase 직접 쿼리
+        console.log('[대시보드] 정적 JSON 파일을 찾을 수 없어 Supabase DB에서 직접 조회합니다.', err);
         [rawProducts, rawPrices] = await Promise.all([
             fetchAllProducts(),
             fetchAllPrices()
         ]);
-        
-        // 캐시 비동기 저장
-        setTimeout(() => {
-            try {
-                localStorage.setItem(CACHE_KEY_PRODUCTS, JSON.stringify(rawProducts));
-                localStorage.setItem(CACHE_KEY_PRICES, JSON.stringify(rawPrices));
-                localStorage.setItem(CACHE_TIMESTAMP_KEY, now.toString());
-                console.log('[대시보드] 데이터를 로컬 캐시에 저장했습니다.');
-            } catch (e) {
-                console.warn('캐시 저장 실패 (용량 부족 등):', e);
-            }
-        }, 100);
     }
-    
+
+    // 캐시 비동기 저장
+    setTimeout(() => {
+        try {
+            localStorage.setItem(CACHE_KEY_PRODUCTS, JSON.stringify(rawProducts));
+            localStorage.setItem(CACHE_KEY_PRICES, JSON.stringify(rawPrices));
+            localStorage.setItem(CACHE_TIMESTAMP_KEY, now.toString());
+            console.log('[대시보드] 데이터를 로컬 캐시에 저장했습니다.');
+        } catch (e) {
+            console.warn('캐시 저장 실패 (용량 부족 등):', e);
+        }
+    }, 100);
+
     return [rawProducts, rawPrices, usingCache];
 }
 
