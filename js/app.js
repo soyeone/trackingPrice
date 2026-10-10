@@ -83,7 +83,7 @@ async function fetchAllProducts() {
 /**
  * Supabase에서 모든 가격 기록 조회 (1,000개 기본 상한 극복)
  */
-async function fetchAllPrices() {
+async function fetchAllPrices(true) /* We can change Supabase fetch to only get latest, but for now we just keep it */ {
     let all = [];
     let from = 0;
     const batchSize = 1000;
