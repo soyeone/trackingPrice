@@ -1123,7 +1123,8 @@ function handleUrlRoute() {
     const hash = window.location.hash;
     if (hash && hash.includes('goodsNo=')) {
         const goodsNo = hash.split('goodsNo=')[1].split('&')[0];
-        showDetailView(goodsNo);
+        // 비동기 호출을 처리하되, await하지 않고 백그라운드에서 실행
+        showDetailView(goodsNo).catch(console.error);
     } else {
         showListView();
     }
@@ -1132,7 +1133,7 @@ function handleUrlRoute() {
 /**
  * 단일 제품 상세 가격 추적 뷰 표시
  */
-function showDetailView(goodsNo) {
+async function showDetailView(goodsNo) {
     const productListView = document.getElementById('product-list-view');
     const productDetailView = document.getElementById('product-detail-view');
 
@@ -1163,6 +1164,23 @@ function showDetailView(goodsNo) {
     const oyLink = document.getElementById('detail-oy-link');
     if (oyLink) {
         oyLink.href = product.url || `https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=${product.goods_no}`;
+    }
+
+    // Lazy load full history from split JSON
+    try {
+        const timestamp = new Date().getTime();
+        const res = await fetch(`data/prices/${goodsNo}.json?t=${timestamp}`);
+        if (res.ok) {
+            const fullHistory = await res.json();
+            pricesByGoodsNo[goodsNo] = fullHistory; // Update with full history
+        } else {
+            // fallback to supabase if JSON doesn't exist
+            console.log(`Fallback to Supabase for ${goodsNo}`);
+            const { data } = await supabaseClient.from('prices').select('*').eq('goods_no', goodsNo).order('date', { ascending: true });
+            if (data && data.length > 0) pricesByGoodsNo[goodsNo] = data;
+        }
+    } catch(e) {
+        console.warn('과거 가격 조회 실패:', e);
     }
 
     // 2. 핵심 지표 바인딩
